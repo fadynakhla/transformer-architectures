@@ -103,3 +103,42 @@ class SelfAttention(nn.Module):
         super().__init__()
         self.attention = MultiHeadAttention(num_heads, embed_dim, attention)
         self.layer_norm = nn.LayerNorm(embed_dim)
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        normed_hidden_states = self.layer_norm(hidden_states)
+        attention_output, attention = self.attention(
+            normed_hidden_states, normed_hidden_states, normed_hidden_states, attn_mask=attention_mask
+        )
+        attention_output = self.dropout(attention_output)
+        outputs = attention_output + hidden_states
+        return outputs, attention
+
+
+class CrossAttention(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, attention: nn.Module) -> None:
+        super().__init__()
+        self.attention = MultiHeadAttention(num_heads, embed_dim, attention)
+        self.layer_norm = nn.LayerNorm(embed_dim)
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        encoder_attention_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        normed_hidden_states = self.layer_norm(hidden_states)
+        attention_output, attention = self.attention(
+            normed_hidden_states,
+            encoder_hidden_states,
+            encoder_hidden_states,
+            attn_mask=encoder_attention_mask,
+        )
+        attention_output = self.dropout(attention_output)
+        outputs = attention_output + hidden_states
+        return outputs, attention
