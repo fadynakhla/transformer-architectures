@@ -1,46 +1,13 @@
-from typing import Literal, Optional, Tuple
-import pydantic
+import abc
+from typing import Callable, Literal, Optional, Tuple
+
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
+import pydantic
 
-
-class ScaledDotProductAttention(nn.Module):
-    def __init__(self, dropout: Optional[float] = 0.1) -> None:
-        super().__init__()
-        self.dropout = nn.Dropout(dropout) if dropout else None
-
-    def forward(
-        self,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        attn_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        d_k = query.size(-1)
-        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
-        if attn_mask is not None:
-            scores = scores.masked_fill(attn_mask == 0, -1e9)
-        attention = F.softmax(scores, dim=-1)
-        if self.dropout:
-            attention = self.dropout(attention)
-        return torch.matmul(attention, value), attention
-
-
-class AdditiveAttention(nn.Module):
-    def __init__(self, dropout: Optional[float] = 0.1) -> None:
-        super().__init__()
-        self.dropout = nn.Dropout(dropout) if dropout else None
-
-    def forward(
-        self,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        attn_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        raise NotImplementedError("AdditiveAttention not implemented yet.")
+from transformers.attention import attention_functions as attn_fns
 
 
 class MultiHeadAttentionConfig(pydantic.BaseModel):
@@ -51,7 +18,7 @@ class MultiHeadAttentionConfig(pydantic.BaseModel):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, num_heads: int, embed_dim: int, attention: nn.Module) -> None:
+    def __init__(self, num_heads: int, embed_dim: int, attention: attn_fns.AttentionFunction) -> None:
         super().__init__()
         self.linears = nn.ModuleList(
             [nn.Linear(embed_dim, embed_dim) for _ in range(4)]
@@ -64,10 +31,10 @@ class MultiHeadAttention(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        attn_mask: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if attn_mask is not None:
-            attn_mask = attn_mask.unsqueeze(1)
+        if attention_mask is not None:
+            attention_mask = attention_mask.unsqueeze(1)
         nbatches = query.size(0)
         query, key, value = [
             l(x)
@@ -75,7 +42,7 @@ class MultiHeadAttention(nn.Module):
             .transpose(1, 2)
             for l, x in zip(self.linears, (query, key, value))
         ]
-        x, attention = self.attention(query, key, value, attn_mask=attn_mask)
+        x, attention = self.attention(query, key, value, attn_mask=attention_mask)
         x = (
             x.transpose(1, 2)
             .contiguous()
@@ -86,9 +53,9 @@ class MultiHeadAttention(nn.Module):
     @classmethod
     def from_config(cls, config: MultiHeadAttentionConfig):
         if config.attention_class == "scaled_dot_product":
-            attention = ScaledDotProductAttention(config.attention_dropout_prob)
+            attention = attn_fns.ScaledDotProductAttention(config.attention_dropout_prob)
         elif config.attention_class == "additive":
-            attention = AdditiveAttention(config.attention_dropout_prob)
+            attention = attn_fns.AdditiveAttention(config.attention_dropout_prob)
         else:
             raise ValueError(f"Unknown attention class {config.attention_class}")
         return cls(
@@ -98,10 +65,15 @@ class MultiHeadAttention(nn.Module):
         )
 
 
-class SelfAttention(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, attention: nn.Module) -> None:
+class AttentionLayerConfig(pydantic.BaseModel):
+    embed_dim: int
+    num_heads: int
+    attention_class: Literal["scaled_dot_product", "additive"]
+
+class SelfAttentionLayer(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, attention_function: attn_fns.AttentionFunction) -> None:
         super().__init__()
-        self.attention = MultiHeadAttention(num_heads, embed_dim, attention)
+        self.attention = MultiHeadAttention(num_heads, embed_dim, attention_function)
         self.layer_norm = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(0.1)
 
@@ -119,7 +91,7 @@ class SelfAttention(nn.Module):
         return outputs, attention
 
 
-class CrossAttention(nn.Module):
+class CrossAttentionLayer(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, attention: nn.Module) -> None:
         super().__init__()
         self.attention = MultiHeadAttention(num_heads, embed_dim, attention)
