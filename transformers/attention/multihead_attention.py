@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import pydantic
 
 from transformers.attention import attention_functions as attn_fns
+from transformers.util_layers import layernorm
 
 
 class MultiHeadAttentionConfig(pydantic.BaseModel):
@@ -70,12 +71,11 @@ class AttentionLayerConfig(pydantic.BaseModel):
     num_heads: int
     attention_class: Literal["scaled_dot_product", "additive"]
 
-class SelfAttentionLayer(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, attention_function: attn_fns.AttentionFunction) -> None:
+class SelfAttentionSubLayer(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, attention: attn_fns.AttentionFunction) -> None:
         super().__init__()
-        self.attention = MultiHeadAttention(num_heads, embed_dim, attention_function)
-        self.layer_norm = nn.LayerNorm(embed_dim)
-        self.dropout = nn.Dropout(0.1)
+        self.attention = MultiHeadAttention(num_heads, embed_dim, attention)
+        self.layer_norm = layernorm.LayerNorm(embed_dim)
 
     def forward(
         self,
@@ -86,17 +86,15 @@ class SelfAttentionLayer(nn.Module):
         attention_output, attention = self.attention(
             normed_hidden_states, normed_hidden_states, normed_hidden_states, attn_mask=attention_mask
         )
-        attention_output = self.dropout(attention_output)
         outputs = attention_output + hidden_states
         return outputs, attention
 
 
-class CrossAttentionLayer(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, attention: nn.Module) -> None:
+class CrossAttentionSubLayer(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, attention: attn_fns.AttentionFunction) -> None:
         super().__init__()
         self.attention = MultiHeadAttention(num_heads, embed_dim, attention)
-        self.layer_norm = nn.LayerNorm(embed_dim)
-        self.dropout = nn.Dropout(0.1)
+        self.layer_norm = layernorm.LayerNorm(embed_dim)
 
     def forward(
         self,
@@ -111,6 +109,5 @@ class CrossAttentionLayer(nn.Module):
             encoder_hidden_states,
             attn_mask=encoder_attention_mask,
         )
-        attention_output = self.dropout(attention_output)
         outputs = attention_output + hidden_states
         return outputs, attention
