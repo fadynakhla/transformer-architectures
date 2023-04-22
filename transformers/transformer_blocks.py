@@ -20,7 +20,9 @@ class TransformerBlock(nn.Module):
             attention_class="scaled_dot_product",
             attention_dropout_prob=dropout,
         )
-        self.self_attention = multihead_attention.MultiHeadAttention.from_config(attention_config)
+        self.self_attention = multihead_attention.MultiHeadAttention.from_config(
+            attention_config
+        )
         self.norm1 = nn.LayerNorm(embed_dim)
         self.norm2 = nn.LayerNorm(embed_dim)
         self.ff = nn.Sequential(
@@ -30,7 +32,9 @@ class TransformerBlock(nn.Module):
         )
         self.dropout = nn.Dropout(dropout)
         if is_decoder:
-            self.cross_attention = multihead_attention.MultiHeadAttention.from_config(attention_config)
+            self.cross_attention = multihead_attention.MultiHeadAttention.from_config(
+                attention_config
+            )
 
     def forward(
         self,
@@ -67,7 +71,9 @@ class TransformerBlock2(nn.Module):
             attention_class="scaled_dot_product",
             attention_dropout_prob=dropout,
         )
-        self.self_attention = multihead_attention.MultiHeadAttention.from_config(attention_config)
+        self.self_attention = multihead_attention.MultiHeadAttention.from_config(
+            attention_config
+        )
         self.norm1 = nn.LayerNorm(embed_dim)
         self.norm2 = nn.LayerNorm(embed_dim)
         self.ff = nn.Sequential(
@@ -77,7 +83,9 @@ class TransformerBlock2(nn.Module):
         )
         self.dropout = nn.Dropout(dropout)
         if is_decoder:
-            self.cross_attention = multihead_attention.MultiHeadAttention.from_config(attention_config)
+            self.cross_attention = multihead_attention.MultiHeadAttention.from_config(
+                attention_config
+            )
 
     def forward(
         self,

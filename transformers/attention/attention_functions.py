@@ -49,4 +49,6 @@ class AdditiveAttention(AttentionFunction):
         value: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        raise NotImplementedError("AdditiveAttention not implemented yet.") # TODO: Implement this.
+        raise NotImplementedError(
+            "AdditiveAttention not implemented yet."
+        )  # TODO: Implement this.
