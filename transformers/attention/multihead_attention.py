@@ -1,5 +1,5 @@
 import abc
-from typing import Callable, Literal, Optional, Tuple
+from typing import Callable, Literal, Optional, Tuple, Type
 
 import torch
 import torch.nn as nn
@@ -51,8 +51,44 @@ class MultiHeadAttention(nn.Module):
         )
         return self.linears[-1](x), attention
 
+
+class AttentionLayerConfig(pydantic.BaseModel):
+    embed_dim: int
+    num_heads: int
+    attention_class: Literal["scaled_dot_product", "additive"]
+    attention_dropout_prob: float
+    normalize_inputs: bool = False
+    normalize_residual: Optional[bool] = None
+
+
+class AttentionLayerFromConfigMixin(abc.ABC):
+
+    @abc.abstractmethod
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        attention: attn_fns.AttentionFunction,
+        normalize_inputs: bool = False,
+        normalize_residual: Optional[bool] = None,
+    ) -> None:
+        """Needs to be implemented by subclasses."""
+
     @classmethod
-    def from_config(cls, config: MultiHeadAttentionConfig):
+    def from_config(cls, config: AttentionLayerConfig) -> Type["AttentionLayerFromConfigMixin"]:
+        """Instantiates an AttentionLayer from a configuration.
+
+        Args:
+            config (AttentionLayerConfig): Config for attention sub
+              layers.
+
+        Raises:
+            ValueError: Raises value error if the attention function is
+              not recognized.
+
+        Returns:
+            _type_: _description_
+        """
         if config.attention_class == "scaled_dot_product":
             attention = attn_fns.ScaledDotProductAttention(
                 config.attention_dropout_prob
@@ -62,19 +98,15 @@ class MultiHeadAttention(nn.Module):
         else:
             raise ValueError(f"Unknown attention class {config.attention_class}")
         return cls(
-            config.num_heads,
-            config.hidden_size,
+            embed_dim=config.embed_dim,
+            num_heads=config.num_heads,
             attention=attention,
+            normalize_inputs=config.normalize_inputs,
+            normalize_residual=config.normalize_residual,
         )
 
 
-class AttentionLayerConfig(pydantic.BaseModel):
-    embed_dim: int
-    num_heads: int
-    attention_class: Literal["scaled_dot_product", "additive"]
-
-
-class SelfAttentionSubLayer(nn.Module):
+class SelfAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
     def __init__(
         self,
         embed_dim: int,
@@ -134,7 +166,7 @@ class SelfAttentionSubLayer(nn.Module):
         return outputs, attention
 
 
-class CrossAttentionSubLayer(nn.Module):
+class CrossAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
     def __init__(
         self,
         embed_dim: int,
