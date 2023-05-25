@@ -7,10 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class AttentionFunction(nn.Module, metaclass=abc.ABCMeta):
-    def __init__(self, dropout: Optional[float] = 0.1) -> None:
+class Attention(nn.Module, metaclass=abc.ABCMeta):
+    def __init__(self, dropout: float) -> None:
         super().__init__()
-        self.dropout = nn.Dropout(dropout) if dropout else None
+        self.dropout = nn.Dropout(dropout)
 
     @abc.abstractmethod
     def forward(
@@ -23,7 +23,7 @@ class AttentionFunction(nn.Module, metaclass=abc.ABCMeta):
         ...
 
 
-class ScaledDotProductAttention(AttentionFunction):
+class ScaledDotProductAttention(Attention):
     def forward(
         self,
         query: torch.Tensor,
@@ -41,7 +41,7 @@ class ScaledDotProductAttention(AttentionFunction):
         return torch.matmul(attention, value), attention
 
 
-class AdditiveAttention(AttentionFunction):
+class AdditiveAttention(Attention):
     def forward(
         self,
         query: torch.Tensor,

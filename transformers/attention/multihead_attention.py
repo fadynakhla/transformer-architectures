@@ -1,5 +1,5 @@
 import abc
-from typing import Callable, Literal, Optional, Tuple, Type
+from typing import Callable, Literal, Optional, Tuple, Type, TypeVar
 
 import torch
 import torch.nn as nn
@@ -18,7 +18,7 @@ class MultiHeadAttentionConfig(pydantic.BaseModel):
 
 class MultiHeadAttention(nn.Module):
     def __init__(
-        self, num_heads: int, embed_dim: int, attention: attn_fns.AttentionFunction
+        self, num_heads: int, embed_dim: int, attention: attn_fns.Attention
     ) -> None:
         super().__init__()
         self.linears = nn.ModuleList(
@@ -57,25 +57,25 @@ class AttentionLayerConfig(pydantic.BaseModel):
     num_heads: int
     attention_class: Literal["scaled_dot_product", "additive"]
     attention_dropout_prob: float
-    normalize_inputs: bool = False
-    normalize_residual: Optional[bool] = None
+    pre_layernorm: bool = False
+
+
+T = TypeVar("T", bound="AttentionLayerFromConfigMixin")
 
 
 class AttentionLayerFromConfigMixin(abc.ABC):
-
     @abc.abstractmethod
     def __init__(
         self,
         embed_dim: int,
         num_heads: int,
-        attention: attn_fns.AttentionFunction,
-        normalize_inputs: bool = False,
-        normalize_residual: Optional[bool] = None,
+        attention: attn_fns.Attention,
+        pre_layernorm: bool,
     ) -> None:
         """Needs to be implemented by subclasses."""
 
     @classmethod
-    def from_config(cls, config: AttentionLayerConfig) -> Type["AttentionLayerFromConfigMixin"]:
+    def from_config(cls: type[T], config: AttentionLayerConfig) -> T:
         """Instantiates an AttentionLayer from a configuration.
 
         Args:
@@ -101,8 +101,7 @@ class AttentionLayerFromConfigMixin(abc.ABC):
             embed_dim=config.embed_dim,
             num_heads=config.num_heads,
             attention=attention,
-            normalize_inputs=config.normalize_inputs,
-            normalize_residual=config.normalize_residual,
+            pre_layernorm=config.pre_layernorm,
         )
 
 
@@ -111,9 +110,8 @@ class SelfAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
         self,
         embed_dim: int,
         num_heads: int,
-        attention: attn_fns.AttentionFunction,
-        normalize_inputs: bool = False,
-        normalize_residual: Optional[bool] = None,
+        attention: attn_fns.Attention,
+        pre_layernorm: bool,
     ) -> None:
         """Generic self-attention sublayer.
 
@@ -126,7 +124,7 @@ class SelfAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
         Args:
             embed_dim (int): Number of dimensions in the input.
             num_heads (int): Numer of attention heads.
-            attention (attn_fns.AttentionFunction): The attention
+            attention (attn_fns.Attention): The attention
               function to use.
             normalize_inputs (bool, optional): Whether to normalize the
               inputs before passing them to multihead attention.
@@ -137,15 +135,11 @@ class SelfAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
         """
         super().__init__()
         self.attention = MultiHeadAttention(num_heads, embed_dim, attention)
-        self.layer_norm = layernorm.LayerNorm(embed_dim) if normalize_inputs else None
-        normalize_residual = (
-            normalize_residual
-            if normalize_residual is not None
-            else not normalize_inputs
-        )
+        self.layer_norm = layernorm.LayerNorm(embed_dim) if pre_layernorm else None
+        post_layernorm = not pre_layernorm
         self.residual_connection = residual.ResidualConnection(
             hidden_size=embed_dim,
-            normalize_outputs=normalize_residual,
+            normalize_outputs=post_layernorm,
         )
 
     def forward(
@@ -171,9 +165,8 @@ class CrossAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
         self,
         embed_dim: int,
         num_heads: int,
-        attention: attn_fns.AttentionFunction,
-        normalize_inputs: bool = False,
-        normalize_residual: Optional[bool] = None,
+        attention: attn_fns.Attention,
+        pre_layernorm: bool,
     ) -> None:
         """Generic cross-attention sublayer.
 
@@ -186,7 +179,7 @@ class CrossAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
         Args:
             embed_dim (int): Number of dimensions in the input.
             num_heads (int): Numer of attention heads.
-            attention (attn_fns.AttentionFunction): The attention
+            attention (attn_fns.Attention): The attention
               function to use.
             normalize_inputs (bool, optional): Whether to normalize the
               inputs before passing them to multihead attention.
@@ -197,15 +190,11 @@ class CrossAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
         """
         super().__init__()
         self.attention = MultiHeadAttention(num_heads, embed_dim, attention)
-        self.layer_norm = layernorm.LayerNorm(embed_dim) if normalize_inputs else None
-        normalize_residual = (
-            normalize_residual
-            if normalize_residual is not None
-            else not normalize_inputs
-        )
+        self.layer_norm = layernorm.LayerNorm(embed_dim) if pre_layernorm else None
+        post_layernorm = not pre_layernorm
         self.residual_connection = residual.ResidualConnection(
             hidden_size=embed_dim,
-            normalize_outputs=normalize_residual,
+            normalize_outputs=post_layernorm,
         )
 
     def forward(

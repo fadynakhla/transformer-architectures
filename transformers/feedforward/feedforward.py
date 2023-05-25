@@ -1,8 +1,15 @@
-from typing import Optional
+import pydantic
 import torch
 import torch.nn as nn
 
 from transformers.util_layers import layernorm, residual
+
+
+class FeedForwardLayerConfig(pydantic.BaseModel):
+    hidden_size: int
+    ff_size: int
+    pre_layernorm: bool = False
+    dropout: float = 0.1
 
 
 class FeedForwardSubLayer(nn.Module):
@@ -10,9 +17,8 @@ class FeedForwardSubLayer(nn.Module):
         self,
         hidden_size: int,
         ff_size: int,
-        dropout: float = 0.1,
-        normalize_inputs: bool = False,
-        normalize_residual: Optional[bool] = None,
+        pre_layernorm: bool,
+        dropout: float,
     ):
         super().__init__()
         layers = [
@@ -21,15 +27,11 @@ class FeedForwardSubLayer(nn.Module):
             nn.Linear(ff_size, hidden_size),
         ]
         self.layers = nn.ModuleList(layers)
-        self.layer_norm = layernorm.LayerNorm(hidden_size) if normalize_inputs else None
-        normalize_residual = (
-            normalize_residual
-            if normalize_residual is not None
-            else not normalize_inputs
-        )
+        self.layer_norm = layernorm.LayerNorm(hidden_size) if pre_layernorm else None
+        post_layernorm = not pre_layernorm
         self.residual_connection = residual.ResidualConnection(
             hidden_size=hidden_size,
-            normalize_outputs=normalize_residual,
+            normalize_outputs=post_layernorm,
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
