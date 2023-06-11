@@ -1,5 +1,5 @@
 import abc
-from typing import Callable, Literal, Optional, Tuple, Type, TypeVar
+from typing import List, Literal, Optional, Tuple, TypeVar
 
 import torch
 import torch.nn as nn
@@ -37,12 +37,7 @@ class MultiHeadAttention(nn.Module):
         if attention_mask is not None:
             attention_mask = attention_mask.unsqueeze(1)
         nbatches = query.size(0)
-        query, key, value = [
-            l(x)
-            .view(nbatches, -1, self.num_heads, int(x.size(-1) // self.num_heads))
-            .transpose(1, 2)
-            for l, x in zip(self.linears, (query, key, value))
-        ]
+        query, key, value = self.project(query, key, value, nbatches)
         x, attention = self.attention(query, key, value, attn_mask=attention_mask)
         x = (
             x.transpose(1, 2)
@@ -50,6 +45,34 @@ class MultiHeadAttention(nn.Module):
             .view(nbatches, -1, self.num_heads * x.size(-1))
         )
         return self.linears[-1](x), attention
+
+    def project(
+        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, nbatches: int
+    ) -> List[torch.Tensor]:
+        """Linearly project the queries, keys, and values and split the
+        result into multiple heads.
+
+        The initial shape is (batch_size, seq_len, embed_dim) and the
+        resulting shape is (batch_size, num_heads, seq_len, embed_dim/num_heads).
+
+        Args:
+            query (torch.Tensor): Queries
+            key (torch.Tensor): Keys
+            value (torch.Tensor): Values
+            nbatches (int): Number of batches
+
+        Returns:
+            List[torch.Tensor]: The projected queries, keys, and values
+        """
+        res = []
+        for l, x in zip(self.linears, (query, key, value)):
+            proj = (
+                l(x)
+                .view(nbatches, -1, self.num_heads, int(x.size(-1) // self.num_heads))
+                .transpose(1, 2)
+            )
+            res.append(proj)
+        return res
 
 
 class AttentionLayerConfig(pydantic.BaseModel):
