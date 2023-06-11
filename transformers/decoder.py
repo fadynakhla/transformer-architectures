@@ -81,9 +81,16 @@ class DecoderForGeneration(Decoder):
         ff_dim: int,
         dropout: float = 0.1,
         pre_layernorm: bool = False,
+        is_encoder_decoder: bool = False,
     ) -> None:
         super().__init__(
-            num_stacks, embed_dim, num_heads, ff_dim, dropout, pre_layernorm
+            num_stacks,
+            embed_dim,
+            num_heads,
+            ff_dim,
+            dropout,
+            pre_layernorm,
+            is_encoder_decoder,
         )
         self.lm_head = LMHead(vocab_size, embed_dim)
 
