@@ -40,7 +40,6 @@ class PositionalEncoding(abc.ABC, nn.Module):
 
 
 class SinusoidalPositionalEncoding(PositionalEncoding):
-
     def positional_encoding(self, x: torch.Tensor) -> torch.Tensor:
         """Generates the positional encoding according to the sinusoidal
         method described in "Attension is All You Need".

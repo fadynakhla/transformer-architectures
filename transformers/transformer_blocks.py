@@ -32,10 +32,10 @@ class TransformerBlock(nn.Module):
             pre_layernorm=pre_layernorm,
             dropout=dropout,
         )
-        if is_decoder:
-            self.cross_attention = (
-                multihead_attention.CrossAttentionSubLayer.from_config(attention_config)
-            )
+
+        self.cross_attention = (
+            multihead_attention.CrossAttentionSubLayer.from_config(attention_config)
+        ) if is_decoder else None
 
     def forward(
         self,
@@ -46,6 +46,7 @@ class TransformerBlock(nn.Module):
     ) -> Tuple[torch.Tensor, ...]:
         x, self_attention_tensor = self.self_attention(hidden_states, attention_mask)
         if encoder_hidden_states is not None:
+            assert self.cross_attention, "Got encoder embeddings"
             x, cross_attention_tensor = self.cross_attention(
                 x, encoder_hidden_states, encoder_attention_mask
             )
