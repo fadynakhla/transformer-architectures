@@ -43,9 +43,9 @@ class Decoder(nn.Module):
         """Forward pass for the decoder.
 
         Args:
-            x (torch.Tensor): input to the decoder
+            hidden_states (torch.Tensor): input to the decoder
             attention_mask (torch.Tensor): attention mask for the
-              decoder input x
+              decoder input hidden_states
             encoder_output (torch.Tensor): output of the encoder
             encoder_attention_mask (torch.Tensor): attention mask for
               the encoder output
