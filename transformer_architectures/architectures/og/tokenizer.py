@@ -1,14 +1,11 @@
 from typing import Dict, List, Optional
 
 import torch
-import tiktoken
+
+from transformer_architectures import tokenization
 
 
-class Tokenizer:
-    def __init__(self, special_tokens: Dict[str, int]) -> None:
-        self.encoding = tiktoken.Encoding(
-            name="transformer",
-        )
+class Tokenizer(tokenization.BaseTokenizer):
 
     def __call__(
         self,
@@ -17,4 +14,20 @@ class Tokenizer:
         padding: Optional[str] = None,
         truncation: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        encoder_input_ids = tiktoken.Encoding
+        return self.batch_encode(encoder_inputs, decoder_inputs, padding, truncation)
+
+    def batch_encode(
+        self,
+        encoder_inputs: List[str],
+        decoder_inputs: List[str],
+        padding: Optional[str] = None,
+        truncation: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        encoder_input_ids_list = self.encoding.encode_batch(encoder_inputs)
+        decoder_input_ids_list = self.encoding.encode_batch(decoder_inputs)
+        if padding:
+            self._pad_and_truncate(encoder_input_ids_list, padding, truncation)
+            self._pad_and_truncate(decoder_input_ids_list, padding, truncation)
+
+    def _pad_and_truncate(input_ids: list[list[int]], padding: Optional[str], truncation: bool) -> tuple[torch.Tensor, torch.Tensor]:
+        ...
