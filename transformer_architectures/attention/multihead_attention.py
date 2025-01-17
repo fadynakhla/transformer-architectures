@@ -112,6 +112,7 @@ class AttentionLayerFromConfigMixin(abc.ABC):
         Returns:
             _type_: _description_
         """
+        attention: attn_fns.Attention
         if config.attention_class == "scaled_dot_product":
             attention = attn_fns.ScaledDotProductAttention(
                 config.attention_dropout_prob
@@ -128,7 +129,7 @@ class AttentionLayerFromConfigMixin(abc.ABC):
         )
 
 
-class SelfAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
+class SelfAttentionSubLayer(nn.Module, AttentionLayerFromConfigMixin):
     def __init__(
         self,
         embed_dim: int,
@@ -183,7 +184,7 @@ class SelfAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
         return outputs, attention
 
 
-class CrossAttentionSubLayer(AttentionLayerFromConfigMixin, nn.Module):
+class CrossAttentionSubLayer(nn.Module, AttentionLayerFromConfigMixin):
     def __init__(
         self,
         embed_dim: int,

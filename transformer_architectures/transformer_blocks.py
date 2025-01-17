@@ -55,5 +55,5 @@ class TransformerBlock(nn.Module):
         x = self.ff(x)
         outputs = (x, self_attention_tensor)
         if encoder_hidden_states is not None:
-            outputs = outputs + (cross_attention_tensor,)
+            return outputs + (cross_attention_tensor,)
         return outputs
