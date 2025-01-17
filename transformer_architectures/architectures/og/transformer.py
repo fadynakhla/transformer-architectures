@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from transformers import encoder, decoder
-from transformers.positional_encoding import positional_encoding
+from transformer_architectures import encoder, decoder
+from transformer_architectures.positional_encoding import positional_encoding
 
 
 class Transformer(nn.Module):

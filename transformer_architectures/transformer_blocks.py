@@ -1,8 +1,8 @@
 from typing import Optional, Tuple
 import torch
 import torch.nn as nn
-from transformers.attention import multihead_attention
-from transformers.feedforward import feedforward
+from transformer_architectures.attention import multihead_attention
+from transformer_architectures.feedforward import feedforward
 
 
 class TransformerBlock(nn.Module):

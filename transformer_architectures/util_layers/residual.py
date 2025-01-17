@@ -2,7 +2,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from transformers.util_layers import layernorm
+from transformer_architectures.util_layers import layernorm
 
 
 class ResidualConnection(nn.Module):
