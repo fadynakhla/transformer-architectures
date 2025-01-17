@@ -2,7 +2,7 @@ import pydantic
 import torch
 import torch.nn as nn
 
-from transformers.util_layers import layernorm, residual
+from transformer_architectures.util_layers import layernorm, residual
 
 
 class FeedForwardLayerConfig(pydantic.BaseModel):

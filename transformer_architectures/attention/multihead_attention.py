@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 import pydantic
 
-from transformers.attention import attention_functions as attn_fns
-from transformers.util_layers import layernorm, residual
+from transformer_architectures.attention import attention_functions as attn_fns
+from transformer_architectures.util_layers import layernorm, residual
 
 
 class MultiHeadAttentionConfig(pydantic.BaseModel):

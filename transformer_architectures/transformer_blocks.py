@@ -1,8 +1,8 @@
 from typing import Optional, Tuple
 import torch
 import torch.nn as nn
-from transformers.attention import multihead_attention
-from transformers.feedforward import feedforward
+from transformer_architectures.attention import multihead_attention
+from transformer_architectures.feedforward import feedforward
 
 
 class TransformerBlock(nn.Module):
@@ -34,8 +34,10 @@ class TransformerBlock(nn.Module):
         )
 
         self.cross_attention = (
-            multihead_attention.CrossAttentionSubLayer.from_config(attention_config)
-        ) if is_decoder else None
+            (multihead_attention.CrossAttentionSubLayer.from_config(attention_config))
+            if is_decoder
+            else None
+        )
 
     def forward(
         self,

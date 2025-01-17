@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from transformers import encoder, decoder
-from transformers.positional_encoding import positional_encoding
+from transformer_architectures import encoder, decoder
+from transformer_architectures.positional_encoding import positional_encoding
 
 
 class Transformer(nn.Module):
@@ -68,3 +68,10 @@ class Transformer(nn.Module):
         )
 
         return self.lm_head(decoder_output)
+
+if __name__=="__main__":
+    model = Transformer(vocab_size=100, num_stacks=6, embed_dim=512, num_heads=8, ff_dim=2048, dropout=0.1)
+    encoder_input = torch.rand(2, 10).long()
+    encoder_attention_mask = torch.ones(2, 10)
+    decoder_input = torch.rand(2, 3)
+    decoder_attention_mask = torch.ones(2, 3)

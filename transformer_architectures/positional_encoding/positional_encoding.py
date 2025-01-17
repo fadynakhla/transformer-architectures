@@ -7,10 +7,6 @@ POS_ENCODING_PERIOD = 10000
 
 
 class PositionalEncoding(abc.ABC, nn.Module):
-    """Generates the positional encoding for the transformer following
-    the method described in the paper "Attention Is All You Need".
-    """
-
     def __init__(self, embed_dim: int) -> None:
         super().__init__()
         self.embed_dim = embed_dim
@@ -40,6 +36,17 @@ class PositionalEncoding(abc.ABC, nn.Module):
 
 
 class SinusoidalPositionalEncoding(PositionalEncoding):
+    """Generates the positional encoding for the transformer following
+    the method described in the paper "Attention Is All You Need".
+    """
+
+    def __init__(self, embed_dim: int) -> None:
+        super().__init__(embed_dim)
+        self.set_encoding_period()
+
+    def set_encoding_period(self, period: int = POS_ENCODING_PERIOD) -> None:
+        self.period = period
+
     def positional_encoding(self, x: torch.Tensor) -> torch.Tensor:
         """Generates the positional encoding according to the sinusoidal
         method described in "Attension is All You Need".
@@ -55,14 +62,15 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
         # We could write this naively with the following:
         # div_term = 1 / (POS_ENCODING_PERIOD ** (torch.arange(0, embed_dim, 2) / embed_dim))
         #
-        # or we can use chained log and exp instead
+        # or we can use chained log and exp instead since log(1/(a^b)) = -b*log(a)
         div_term = torch.exp(
             -(
                 (torch.arange(0, self.embed_dim, 2) / self.embed_dim)
-                * torch.log(POS_ENCODING_PERIOD)
+                * torch.log(self.period)
             )
         )
 
         encodings = torch.zeros((seq_len, self.embed_dim))
         encodings[:, 0::2] = torch.sin(pos * div_term)
         encodings[:, 1::2] = torch.cos(pos * div_term)
+        return encodings.unsqueeze(0)

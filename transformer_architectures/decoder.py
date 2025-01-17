@@ -2,8 +2,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from transformers import transformer_blocks
-from transformers.util_layers import layernorm
+from transformer_architectures import transformer_blocks
+from transformer_architectures.util_layers import layernorm
 
 
 class Decoder(nn.Module):
