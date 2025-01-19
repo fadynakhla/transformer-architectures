@@ -35,10 +35,10 @@ class MultiHeadAttention(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if attention_mask is not None:
-            attention_mask = attention_mask.unsqueeze(1)
+            attention_mask = self.broadcast_mask(attention_mask)
         nbatches = query.size(0)
         query, key, value = self.project(query, key, value, nbatches)
-        x, attention = self.attention(query, key, value, attn_mask=attention_mask)
+        x, attention = self.attention(query, key, value, mask=attention_mask)
         x = (
             x.transpose(1, 2)
             .contiguous()
@@ -73,6 +73,22 @@ class MultiHeadAttention(nn.Module):
             )
             res.append(proj)
         return res
+
+    def broadcast_mask(self, mask: torch.Tensor) -> torch.Tensor:
+        """Make the attention mask broadcastable to the shape of the
+        projected query, key, and value.
+
+        Args:
+            mask (torch.Tensor): Attention mask of shape (batch_size, seq_len)
+              or (batch_size, seq_len, seq_len).
+
+        Returns:
+            torch.Tensor: The broadcastable attention mask.
+        """
+        mask = mask.unsqueeze(1)
+        if mask.dim() == 3:
+            mask = mask.unsqueeze(-2)
+        return mask
 
 
 class AttentionLayerConfig(pydantic.BaseModel):
@@ -178,7 +194,7 @@ class SelfAttentionSubLayer(nn.Module, AttentionLayerFromConfigMixin):
             normed_hidden_states,
             normed_hidden_states,
             normed_hidden_states,
-            attn_mask=attention_mask,
+            attention_mask=attention_mask,
         )
         outputs = self.residual_connection(hidden_states, attention_output)
         return outputs, attention
@@ -196,7 +212,7 @@ class CrossAttentionSubLayer(nn.Module, AttentionLayerFromConfigMixin):
 
         Typically used only in decoder stack when using an
         encoder-decoder architecture. Allows for different normalization
-        schemes e.g. the original transformer paper uses layer
+        schemes. e.g. the original transformer paper uses layer
         normalization on the output of the residual connection while T5
         uses layer normalization that bypasses the residual connection.
 
@@ -234,7 +250,7 @@ class CrossAttentionSubLayer(nn.Module, AttentionLayerFromConfigMixin):
             normed_hidden_states,
             encoder_hidden_states,
             encoder_hidden_states,
-            attn_mask=encoder_attention_mask,
+            attention_mask=encoder_attention_mask,
         )
         outputs = self.residual_connection(hidden_states, attention_output)
         return outputs, attention

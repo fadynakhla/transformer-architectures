@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from transformer_architectures import encoder, decoder
+from transformer_architectures import encoder, decoder, masking
 from transformer_architectures.positional_encoding import positional_encoding
 
 
@@ -34,7 +34,7 @@ class Transformer(nn.Module):
             dropout=dropout,
             pre_layernorm=self.pre_layernorm,
         )
-        self.decoder = decoder.Decoder(
+        self. decoder = decoder.Decoder(
             num_stacks=num_stacks,
             embed_dim=embed_dim,
             num_heads=num_heads,
@@ -60,6 +60,7 @@ class Transformer(nn.Module):
         )
 
         encoder_output = self.encoder(input_embeddings, encoder_attention_mask)
+        decoder_attention_mask = self.suplement_causal_mask(decoder_attention_mask)
         decoder_output = self.decoder(
             decoder_embeddings,
             decoder_attention_mask,
@@ -68,6 +69,22 @@ class Transformer(nn.Module):
         )
 
         return self.lm_head(decoder_output)
+
+    def suplement_causal_mask(
+        self, decoder_attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        mask_dim = decoder_attention_mask.dim()
+        causal_mask = masking.causal_mask(decoder_attention_mask)
+        match mask_dim:
+            # single inputs should still be "batched"
+            # case 1:
+            #     return decoder_attention_mask & causal_mask.squeeze(0)
+            case 2:
+                return decoder_attention_mask.unsqueeze(-2) & causal_mask
+            case 3:
+                return decoder_attention_mask & causal_mask
+            case _:
+                raise ValueError(f"Invalid dimension of input mask: {mask_dim}")
 
 
 if __name__ == "__main__":
@@ -80,6 +97,8 @@ if __name__ == "__main__":
         dropout=0.1,
     )
     encoder_input = torch.rand(2, 10).long()
-    encoder_attention_mask = torch.ones(2, 10)
-    decoder_input = torch.rand(2, 3)
-    decoder_attention_mask = torch.ones(2, 3)
+    encoder_attention_mask = torch.ones(2, 10).long()
+    decoder_input = torch.rand(2, 3).long()
+    decoder_attention_mask = torch.ones(2, 3).long()
+    output = model(encoder_input, encoder_attention_mask, decoder_input, decoder_attention_mask)
+    print(f"Model output shape: {output.shape}")
