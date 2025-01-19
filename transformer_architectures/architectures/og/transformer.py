@@ -88,6 +88,7 @@ class Transformer(nn.Module):
 
 
 if __name__ == "__main__":
+    device = torch.device("cuda")
     model = Transformer(
         vocab_size=100,
         num_stacks=6,
@@ -95,10 +96,11 @@ if __name__ == "__main__":
         num_heads=8,
         ff_dim=2048,
         dropout=0.1,
-    )
-    encoder_input = torch.rand(2, 10).long()
-    encoder_attention_mask = torch.ones(2, 10).long()
-    decoder_input = torch.rand(2, 3).long()
-    decoder_attention_mask = torch.ones(2, 3).long()
-    output = model(encoder_input, encoder_attention_mask, decoder_input, decoder_attention_mask)
+    ).to(device=device)
+    for _ in range(1000):
+        encoder_input = torch.rand(2, 2000).long().to(device=device)
+        encoder_attention_mask = torch.ones(2, 2000).long().to(device=device)
+        decoder_input = torch.rand(2, 87).long().to(device=device)
+        decoder_attention_mask = torch.ones(2, 87).long().to(device=device)
+        output = model(encoder_input, encoder_attention_mask, decoder_input, decoder_attention_mask)
     print(f"Model output shape: {output.shape}")

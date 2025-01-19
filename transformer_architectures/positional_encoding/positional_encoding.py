@@ -22,7 +22,7 @@ class PositionalEncoding(abc.ABC, nn.Module):
         Returns:
             torch.Tensor: sum of input and positional encoding
         """
-        return x + self.positional_encoding(x)
+        return x + self.positional_encoding(x).to(device=x.device)
 
     @abc.abstractmethod
     def positional_encoding(self, x: torch.Tensor) -> torch.Tensor:
