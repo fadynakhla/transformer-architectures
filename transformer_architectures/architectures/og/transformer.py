@@ -100,7 +100,7 @@ if __name__ == "__main__":
     for _ in range(1000):
         encoder_input = torch.rand(2, 2000).long().to(device=device)
         encoder_attention_mask = torch.ones(2, 2000).long().to(device=device)
-        decoder_input = torch.rand(2, 87).long().to(device=device)
-        decoder_attention_mask = torch.ones(2, 87).long().to(device=device)
+        decoder_input = torch.rand(2, 587).long().to(device=device)
+        decoder_attention_mask = torch.ones(2, 587).long().to(device=device)
         output = model(encoder_input, encoder_attention_mask, decoder_input, decoder_attention_mask)
     print(f"Model output shape: {output.shape}")
