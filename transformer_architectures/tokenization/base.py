@@ -72,7 +72,13 @@ class BaseTokenizer:
 
 
 if __name__ == "__main__":
-    tokenizer = BaseTokenizer("cl100k_base", pad_token="<pad>", bos_token="<bos>", eos_token="<eos>", model_max_len=512)
+    tokenizer = BaseTokenizer(
+        "cl100k_base",
+        pad_token="<pad>",
+        bos_token="<bos>",
+        eos_token="<eos>",
+        model_max_len=512,
+    )
     print("Derived Encoding: ")
     print(tokenizer.encoding.special_tokens_set)
     print(len(tokenizer.encoding._mergeable_ranks))

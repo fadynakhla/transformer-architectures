@@ -34,7 +34,7 @@ class Transformer(nn.Module):
             dropout=dropout,
             pre_layernorm=self.pre_layernorm,
         )
-        self. decoder = decoder.Decoder(
+        self.decoder = decoder.Decoder(
             num_stacks=num_stacks,
             embed_dim=embed_dim,
             num_heads=num_heads,
@@ -90,7 +90,7 @@ class Transformer(nn.Module):
 if __name__ == "__main__":
     device = torch.device("cuda")
     model = Transformer(
-        vocab_size=100,
+        vocab_size=50000,
         num_stacks=6,
         embed_dim=512,
         num_heads=8,
@@ -98,9 +98,11 @@ if __name__ == "__main__":
         dropout=0.1,
     ).to(device=device)
     for _ in range(1000):
-        encoder_input = torch.rand(2, 2000).long().to(device=device)
-        encoder_attention_mask = torch.ones(2, 2000).long().to(device=device)
-        decoder_input = torch.rand(2, 587).long().to(device=device)
-        decoder_attention_mask = torch.ones(2, 587).long().to(device=device)
-        output = model(encoder_input, encoder_attention_mask, decoder_input, decoder_attention_mask)
+        encoder_input = torch.rand(4, 1000).long().to(device=device)
+        encoder_attention_mask = torch.ones(4, 1000).long().to(device=device)
+        decoder_input = torch.rand(4, 587).long().to(device=device)
+        decoder_attention_mask = torch.ones(4, 587).long().to(device=device)
+        output = model(
+            encoder_input, encoder_attention_mask, decoder_input, decoder_attention_mask
+        )
     print(f"Model output shape: {output.shape}")
