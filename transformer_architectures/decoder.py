@@ -54,7 +54,7 @@ class Decoder(nn.Module):
             torch.Tensor: decoder output
         """
         for decoder_block in self.decoder_stack:
-            hidden_states, _ = decoder_block(
+            hidden_states, _, _ = decoder_block(
                 hidden_states, attention_mask, encoder_output, encoder_attention_mask
             )
         if self.layer_norm:

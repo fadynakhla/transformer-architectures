@@ -1,4 +1,6 @@
 import abc
+
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -20,7 +22,7 @@ class PositionalEncoding(abc.ABC, nn.Module):
         Returns:
             torch.Tensor: sum of input and positional encoding
         """
-        return x + self.positional_encoding(x)
+        return x + self.positional_encoding(x).to(device=x.device)
 
     @abc.abstractmethod
     def positional_encoding(self, x: torch.Tensor) -> torch.Tensor:
@@ -66,7 +68,7 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
         div_term = torch.exp(
             -(
                 (torch.arange(0, self.embed_dim, 2) / self.embed_dim)
-                * torch.log(self.period)
+                * np.log(self.period)
             )
         )
 
