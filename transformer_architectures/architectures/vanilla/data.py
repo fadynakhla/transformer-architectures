@@ -1,3 +1,4 @@
+import math
 from typing import Generic, Optional, TypeVar
 import pydantic
 import torch
@@ -97,3 +98,41 @@ class TransformerDataCollator:
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
         return LabeledBatch.from_batch_encoding(batch_encoding, self.label_pad_token_id)
+
+
+class TransformerDataModule:
+    """Inspired by data modules in torch lightning"""
+
+    def __init__(
+        self,
+        data: list[SourceTarget],
+        tokenizer: tokenization.Tokenizer,
+        test_split: float = 0.2,
+        val_split: float = 0.1,
+        seed: float = 42,
+    ) -> None:
+        self.data = data
+        self.tokenizer = tokenizer
+        self.val_split = val_split
+        self.test_split = test_split
+        self.generator = torch.Generator().manual_seed(seed)
+
+    def setup(self) -> None:
+        full_dataset = TransformerDataset(self.data, self.tokenizer)
+        train_data, val_data, test_data = train_val_test_split(
+            full_dataset, self.val_split, self.test_split, self.generator
+        )
+
+
+def train_val_test_split(
+    dataset: TransformerDataset,
+    val_split: float,
+    test_split: float,
+    generator: torch.Generator,
+) -> tuple[TransformerDataset, TransformerDataset, TransformerDataset]:
+    total_size = len(dataset)
+    val_size = math.floor(total_size * val_split)
+    test_size = math.floor(total_size * test_split)
+    train_size = total_size - val_size - test_size
+    subs = torchd.random_split(dataset, [train_size, val_size, test_size], generator)
+    return tuple(subs)
