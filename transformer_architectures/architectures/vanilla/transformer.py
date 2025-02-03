@@ -1,5 +1,5 @@
 import torch
-import torch.nn as nn
+from torch import nn
 
 from transformer_architectures import decoder, encoder, masking
 from transformer_architectures.positional_encoding import positional_encoding

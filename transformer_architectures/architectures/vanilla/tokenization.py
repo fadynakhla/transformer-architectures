@@ -170,6 +170,18 @@ class Tokenizer(tokenization.BaseTokenizer):
         truncation: bool,
         pad_to_multiple_of: Optional[int],
     ) -> TensorBatchEncoding:
+        """Pad and tensorize a batch.
+
+        Args:
+            batch (list[dict[str, list[int]]]): Batch of tokenized data.
+            padding (PaddingOptions): How to pad, "longest" or "max".
+            truncation (bool): Whether the result should be truncated.
+            pad_to_multiple_of (Optional[int]): If provided, the resulting
+              sequence lengths will be a multiple of the given value.
+
+        Returns:
+            TensorBatchEncoding: Padded and tensorized Batch Encoding.
+        """
         padded_input = self._pad_and_truncate(
             [sample["input_ids"] for sample in batch],
             padding,
@@ -225,7 +237,7 @@ class Tokenizer(tokenization.BaseTokenizer):
             case "max":
                 pad_len = self.model_max_len
             case "longest":
-                pad_len = max([len(seq) for seq in input_ids])
+                pad_len = max(len(seq) for seq in input_ids)
             case _:
                 raise ValueError(
                     f"Invalid padding option. Must be one of {PaddingOptions}"

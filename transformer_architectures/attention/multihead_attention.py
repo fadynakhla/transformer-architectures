@@ -3,7 +3,7 @@ import abc
 
 import pydantic
 import torch
-import torch.nn as nn
+from torch import nn
 
 from transformer_architectures.attention import attention_functions as attn_fns
 from transformer_architectures.util_layers import layernorm, residual
