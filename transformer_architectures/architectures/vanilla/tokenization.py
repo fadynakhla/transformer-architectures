@@ -172,11 +172,17 @@ class Tokenizer(tokenization.BaseTokenizer):
         pad_to_multiple_of: Optional[int],
     ) -> TensorBatchEncoding:
         padded_inp = self._pad_and_truncate(
-            [sample["input_ids"] for sample in batch], padding, truncation, pad_to_multiple_of
+            [sample["input_ids"] for sample in batch],
+            padding,
+            truncation,
+            pad_to_multiple_of,
         )
         input_ids, attention_mask = self._tensorize(padded_inp)
         padded_dec_inp = self._pad_and_truncate(
-            [sample["decoder_input_ids"] for sample in batch], padding, truncation, pad_to_multiple_of
+            [sample["decoder_input_ids"] for sample in batch],
+            padding,
+            truncation,
+            pad_to_multiple_of,
         )
         decoder_input_ids, decoder_attention_mask = self._tensorize(padded_dec_inp)
         return TensorBatchEncoding(
@@ -194,9 +200,15 @@ class Tokenizer(tokenization.BaseTokenizer):
         return input_ids, attention_mask
 
     def _pad_and_truncate(
-        self, input_ids_list: list[list[int]], padding: PaddingOptions, truncation: bool, pad_to_multiple_of: Optional[int] = None
+        self,
+        input_ids_list: list[list[int]],
+        padding: PaddingOptions,
+        truncation: bool,
+        pad_to_multiple_of: Optional[int] = None,
     ) -> list[list[int]]:
-        pad_length = self._determine_pad_length(input_ids_list, padding, truncation, pad_to_multiple_of)
+        pad_length = self._determine_pad_length(
+            input_ids_list, padding, truncation, pad_to_multiple_of
+        )
         padded_inputs = [
             (seq + [self.pad_token_id] * max(pad_length - len(seq), 0))[:pad_length]
             for seq in input_ids_list
@@ -204,7 +216,11 @@ class Tokenizer(tokenization.BaseTokenizer):
         return padded_inputs
 
     def _determine_pad_length(
-        self, input_ids: list[list[int]], padding: PaddingOptions, truncation: bool, pad_to_multiple_of: Optional[int]
+        self,
+        input_ids: list[list[int]],
+        padding: PaddingOptions,
+        truncation: bool,
+        pad_to_multiple_of: Optional[int],
     ) -> int:
         match padding:
             case "max":
@@ -216,8 +232,10 @@ class Tokenizer(tokenization.BaseTokenizer):
                     f"Invalid padding option. Must be one of {PaddingOptions}"
                 )
         if pad_to_multiple_of and not (rem := pad_len % pad_to_multiple_of):
-            assert self.model_max_len % pad_to_multiple_of == 0, "Model max len must be multiple of pad_to_multiple_of"
-            pad_len += (pad_to_multiple_of - rem)
+            assert (
+                self.model_max_len % pad_to_multiple_of == 0
+            ), "Model max len must be multiple of pad_to_multiple_of"
+            pad_len += pad_to_multiple_of - rem
 
         if pad_len > self.model_max_len and truncation:
             pad_len = self.model_max_len

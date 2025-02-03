@@ -1,5 +1,5 @@
 import math
-from typing import Generic, Optional, TypeVar
+from typing import Optional, TypeVar
 import pydantic
 import torch
 from torch.utils import data as torchd
@@ -28,7 +28,7 @@ class LabeledBatch(pydantic.BaseModel):
 
     @classmethod
     def from_batch_encoding(
-        cls, be: tokenization.TensorBatchEncoding, ignore_id: int
+        cls, be: tokenization.TensorBatchEncoding, ignore_id: int = IGNORE_ID
     ) -> "LabeledBatch":
         decoder_input_ids = be.decoder_input_ids[:, :-1]
         decoder_attention_mask = be.decoder_attention_mask[:, :-1]
@@ -100,6 +100,13 @@ class TransformerDataCollator:
         return LabeledBatch.from_batch_encoding(batch_encoding, self.label_pad_token_id)
 
 
+TrainValTestSplit = tuple[
+    torchd.Subset[TransformerDataset],
+    torchd.Subset[TransformerDataset],
+    torchd.Subset[TransformerDataset],
+]
+
+
 class TransformerDataModule:
     """Inspired by data modules in torch lightning"""
 
@@ -109,7 +116,7 @@ class TransformerDataModule:
         tokenizer: tokenization.Tokenizer,
         test_split: float = 0.2,
         val_split: float = 0.1,
-        seed: float = 42,
+        seed: int = 42,
     ) -> None:
         self.data = data
         self.tokenizer = tokenizer
@@ -129,10 +136,10 @@ def train_val_test_split(
     val_split: float,
     test_split: float,
     generator: torch.Generator,
-) -> tuple[TransformerDataset, TransformerDataset, TransformerDataset]:
+) -> TrainValTestSplit:
     total_size = len(dataset)
     val_size = math.floor(total_size * val_split)
     test_size = math.floor(total_size * test_split)
     train_size = total_size - val_size - test_size
     subs = torchd.random_split(dataset, [train_size, val_size, test_size], generator)
-    return tuple(subs)
+    return subs[0], subs[1], subs[2]
