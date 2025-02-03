@@ -4,7 +4,7 @@ import math
 
 import torch
 from torch import nn
-import torch.nn.functional as F
+from torch.nn import functional as F
 
 
 class Attention(nn.Module, metaclass=abc.ABCMeta):
