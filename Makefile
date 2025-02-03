@@ -6,4 +6,5 @@ typecheck:
 
 .PHONY: format
 format:
+	poetry run isort transformer_architectures
 	poetry run black transformer_architectures

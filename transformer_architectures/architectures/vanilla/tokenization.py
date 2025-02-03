@@ -5,7 +5,6 @@ import torch
 
 from transformer_architectures import tokenization
 
-
 PaddingOptions = Literal["longest", "max"]
 
 Enc = TypeVar("Enc", list[list[int]], torch.Tensor)
@@ -171,13 +170,13 @@ class Tokenizer(tokenization.BaseTokenizer):
         truncation: bool,
         pad_to_multiple_of: Optional[int],
     ) -> TensorBatchEncoding:
-        padded_inp = self._pad_and_truncate(
+        padded_input = self._pad_and_truncate(
             [sample["input_ids"] for sample in batch],
             padding,
             truncation,
             pad_to_multiple_of,
         )
-        input_ids, attention_mask = self._tensorize(padded_inp)
+        input_ids, attention_mask = self._tensorize(padded_input)
         padded_dec_inp = self._pad_and_truncate(
             [sample["decoder_input_ids"] for sample in batch],
             padding,
@@ -231,7 +230,7 @@ class Tokenizer(tokenization.BaseTokenizer):
                 raise ValueError(
                     f"Invalid padding option. Must be one of {PaddingOptions}"
                 )
-        if pad_to_multiple_of and not (rem := pad_len % pad_to_multiple_of):
+        if pad_to_multiple_of and (rem := pad_len % pad_to_multiple_of) != 0:
             assert (
                 self.model_max_len % pad_to_multiple_of == 0
             ), "Model max len must be multiple of pad_to_multiple_of"

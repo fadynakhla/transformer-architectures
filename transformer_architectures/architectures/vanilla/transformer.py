@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from transformer_architectures import encoder, decoder, masking
+from transformer_architectures import decoder, encoder, masking
 from transformer_architectures.positional_encoding import positional_encoding
 
 

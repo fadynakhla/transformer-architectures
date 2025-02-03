@@ -4,7 +4,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-
 POS_ENCODING_PERIOD = 10000
 
 

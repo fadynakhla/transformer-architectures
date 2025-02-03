@@ -1,6 +1,8 @@
 from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
+
 from transformer_architectures.attention import multihead_attention
 from transformer_architectures.feedforward import feedforward
 
