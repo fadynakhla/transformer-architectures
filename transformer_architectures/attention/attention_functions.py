@@ -1,10 +1,10 @@
+from typing import Optional, Tuple
 import abc
-from typing import Callable, Literal, Optional, Tuple
-
 import math
+
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn
+from torch.nn import functional as F
 
 
 class Attention(nn.Module, metaclass=abc.ABCMeta):

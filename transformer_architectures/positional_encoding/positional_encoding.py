@@ -2,8 +2,7 @@ import abc
 
 import numpy as np
 import torch
-import torch.nn as nn
-
+from torch import nn
 
 POS_ENCODING_PERIOD = 10000
 

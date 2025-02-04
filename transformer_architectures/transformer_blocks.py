@@ -1,6 +1,8 @@
 from typing import Optional, Tuple
+
 import torch
-import torch.nn as nn
+from torch import nn
+
 from transformer_architectures.attention import multihead_attention
 from transformer_architectures.feedforward import feedforward
 
@@ -21,7 +23,7 @@ class TransformerBlock(nn.Module):
             num_heads=num_heads,
             attention_class="scaled_dot_product",
             attention_dropout_prob=dropout,
-            pre_layernorm=pre_layernorm,  # Will be configurable in the future current setting is for og transformer
+            pre_layernorm=pre_layernorm,
         )
         self.self_attention = multihead_attention.SelfAttentionSubLayer.from_config(
             attention_config

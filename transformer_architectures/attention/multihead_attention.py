@@ -1,9 +1,9 @@
-import abc
 from typing import List, Literal, Optional, Tuple, TypeVar
+import abc
 
-import torch
-import torch.nn as nn
 import pydantic
+import torch
+from torch import nn
 
 from transformer_architectures.attention import attention_functions as attn_fns
 from transformer_architectures.util_layers import layernorm, residual

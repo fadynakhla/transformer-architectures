@@ -1,10 +1,11 @@
-from typing import Generic, Optional, TypeVar
+from typing import Optional, Protocol, TypeVar, runtime_checkable
+import math
+
 import pydantic
 import torch
 from torch.utils import data as torchd
 
 from transformer_architectures.architectures.vanilla import tokenization
-
 
 IGNORE_ID = -100
 
@@ -27,7 +28,7 @@ class LabeledBatch(pydantic.BaseModel):
 
     @classmethod
     def from_batch_encoding(
-        cls, be: tokenization.TensorBatchEncoding, ignore_id: int
+        cls, be: tokenization.TensorBatchEncoding, ignore_id: int = IGNORE_ID
     ) -> "LabeledBatch":
         decoder_input_ids = be.decoder_input_ids[:, :-1]
         decoder_attention_mask = be.decoder_attention_mask[:, :-1]
@@ -97,3 +98,89 @@ class TransformerDataCollator:
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
         return LabeledBatch.from_batch_encoding(batch_encoding, self.label_pad_token_id)
+
+
+class TransformerDataModule:
+    """Inspired by data modules in torch lightning."""
+
+    def __init__(
+        self,
+        data: list[SourceTarget],
+        tokenizer: tokenization.Tokenizer,
+        per_device_train_batch_size: int,
+        per_device_eval_batch_size: int,
+        test_split: float = 0.2,
+        val_split: float = 0.1,
+        seed: int = 42,
+    ) -> None:
+        self.data = data
+        self.tokenizer = tokenizer
+        self.per_device_train_batch_size = per_device_train_batch_size
+        self.per_device_eval_batch_size = per_device_eval_batch_size
+        self.val_split = val_split
+        self.test_split = test_split
+        self.generator = torch.Generator().manual_seed(seed)
+        self.data_collator = TransformerDataCollator(
+            tokenizer=tokenizer, padding="longest", pad_to_multiple_of=8
+        )
+
+    def setup(self) -> None:
+        full_dataset = TransformerDataset(self.data, self.tokenizer)
+        self.train_dataset, self.val_dataset, self.test_dataset = train_val_test_split(
+            full_dataset, self.val_split, self.test_split, self.generator
+        )
+
+    def train_dataloader(self) -> torchd.DataLoader:
+        return torchd.DataLoader(
+            dataset=self.train_dataset,
+            batch_size=self.per_device_train_batch_size,
+            collate_fn=self.data_collator,
+            shuffle=True,
+            generator=self.generator,
+        )
+
+    def val_dataloader(self) -> torchd.DataLoader:
+        return torchd.DataLoader(
+            dataset=self.val_dataset,
+            batch_size=self.per_device_eval_batch_size,
+            collate_fn=self.data_collator,
+            shuffle=False,
+        )
+
+    def test_dataloader(self) -> torchd.DataLoader:
+        return torchd.DataLoader(
+            dataset=self.test_dataset,
+            batch_size=self.per_device_eval_batch_size,
+            collate_fn=self.data_collator,
+            shuffle=False,
+        )
+
+
+@runtime_checkable
+class HasLen(Protocol):
+    def __len__(self) -> int:
+        ...
+
+
+DatasetType = TypeVar("DatasetType", bound=torchd.Dataset)
+DataSplit = tuple[
+    torchd.Subset[DatasetType],
+    torchd.Subset[DatasetType],
+    torchd.Subset[DatasetType],
+]
+
+
+def train_val_test_split(
+    dataset: DatasetType,
+    val_split: float,
+    test_split: float,
+    generator: torch.Generator,
+) -> DataSplit:
+    if not isinstance(dataset, HasLen):
+        raise ValueError("Dataset must implement __len__")
+    total_size = len(dataset)
+    val_size = math.floor(total_size * val_split)
+    test_size = math.floor(total_size * test_split)
+    train_size = total_size - val_size - test_size
+    subs = torchd.random_split(dataset, [train_size, val_size, test_size], generator)
+    return subs[0], subs[1], subs[2]
