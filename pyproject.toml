@@ -6,11 +6,12 @@ authors = ["Fady Nakhla <fnakhla23@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.11, <3.14"
 torch = "^2.0.0"
 numpy = "^1.24.2"
 tiktoken = "^0.8.0"
 pydantic = "^2.10.5"
+aim = "^3.27.0"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -19,6 +20,7 @@ black = "^23.3.0"
 pylint = "^3.0.0"
 jupyter = "^1.0.0"
 isort = "^6.0.0"
+types-tqdm = "^4.67.0.20250301"
 
 [build-system]
 requires = ["poetry-core"]
@@ -29,3 +31,10 @@ build-backend = "poetry.core.masonry.api"
 known_typing = ["typing"]
 sections = ["FUTURE", "TYPING", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 no_lines_before=["STDLIB"]
+
+
+[tool.mypy]
+
+[[tool.mypy.overrides]]
+module = "aim.*"
+ignore_missing_imports = true

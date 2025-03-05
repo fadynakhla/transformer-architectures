@@ -68,12 +68,17 @@ class BaseTokenizer:
             pat_str=base_encoding._pat_str,
             mergeable_ranks=mergable_ranks,
             special_tokens=special_tokens,
+            explicit_n_vocab=len(mergable_ranks) + num_special,
         )
+
+    @property
+    def vocab_size(self) -> int:
+        return self.encoding.n_vocab
 
 
 if __name__ == "__main__":
     tokenizer = BaseTokenizer(
-        "cl100k_base",
+        "r50k_base",
         pad_token="<pad>",
         bos_token="<bos>",
         eos_token="<eos>",
@@ -82,5 +87,13 @@ if __name__ == "__main__":
     print("Derived Encoding: ")
     print(tokenizer.encoding.special_tokens_set)
     print(len(tokenizer.encoding._mergeable_ranks))
+    i = 0
+    for k, v in tokenizer.encoding._mergeable_ranks.items():
+        if i == 5:
+            break
+        print(f"Mergeable rank: bpe {k!r}, index {v}")
+        i += 1
     print(tokenizer.encoding.n_vocab)
+    print(tokenizer.encoding.max_token_value + 1)
     print(tokenizer.bos_token_id)
+    print(tokenizer.eos_token_id)

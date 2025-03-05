@@ -21,6 +21,8 @@ class BatchEncoding(pydantic.BaseModel, Generic[Enc, Dec, Mask, DecMask]):
     attention_mask: Mask
     decoder_attention_mask: DecMask
 
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
+
 
 TensorBatchEncoding = BatchEncoding[
     torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor

@@ -24,7 +24,15 @@ class LabeledBatch(pydantic.BaseModel):
     decoder_input_ids: torch.Tensor
     decoder_attention_mask: torch.Tensor
     target: torch.Tensor
-    target_ignore_mask: torch.Tensor
+
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
+
+    def to(self, device: torch.device) -> None:
+        self.input_ids = self.input_ids.to(device)
+        self.attention_mask = self.attention_mask.to(device)
+        self.decoder_input_ids = self.decoder_input_ids.to(device)
+        self.decoder_attention_mask = self.decoder_attention_mask.to(device)
+        self.target = self.target.to(device)
 
     @classmethod
     def from_batch_encoding(
@@ -33,17 +41,14 @@ class LabeledBatch(pydantic.BaseModel):
         decoder_input_ids = be.decoder_input_ids[:, :-1]
         decoder_attention_mask = be.decoder_attention_mask[:, :-1]
         target = be.decoder_input_ids[:, 1:]
-        target_ignore_mask = be.decoder_attention_mask[:, 1:]
-        target_ignore_mask = torch.where(
-            target_ignore_mask == 0, ignore_id, target_ignore_mask
-        )
+        target = torch.where(be.decoder_attention_mask[:, 1:] == 0, ignore_id, target)
+
         return cls(
             input_ids=be.input_ids,
             attention_mask=be.attention_mask,
             decoder_input_ids=decoder_input_ids,
             decoder_attention_mask=decoder_attention_mask,
             target=target,
-            target_ignore_mask=target_ignore_mask,
         )
 
 
