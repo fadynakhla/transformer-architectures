@@ -14,17 +14,17 @@ class BaseTokenizer:
         additional_special_tokens: Optional[set[str]] = None,
     ) -> None:
         base_encoding = tiktoken.get_encoding(encoding_name=base_encoding_name)
-        special_tokens = self._get_special_tokens(
+        self.special_tokens = self._get_special_tokens(
             pad_token, bos_token, eos_token, additional_special_tokens
         )
-        self.encoding = self._get_encoding_from_base(base_encoding, special_tokens)
+        self.encoding = self._get_encoding_from_base(base_encoding, self.special_tokens)
         self.model_max_len = model_max_len
         self.pad_token = pad_token
-        self.pad_token_id = special_tokens[pad_token] if pad_token else None
+        self.pad_token_id = self.special_tokens[pad_token] if pad_token else None
         self.bos_token = bos_token
-        self.bos_token_id = special_tokens[bos_token] if bos_token else None
+        self.bos_token_id = self.special_tokens[bos_token] if bos_token else None
         self.eos_token = eos_token
-        self.eos_token_id = special_tokens[eos_token] if eos_token else None
+        self.eos_token_id = self.special_tokens[eos_token] if eos_token else None
 
     @classmethod
     def _get_special_tokens(

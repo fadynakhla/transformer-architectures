@@ -1,3 +1,4 @@
+import multiprocessing
 from typing import Optional, Protocol, TypeVar, runtime_checkable
 import math
 
@@ -142,6 +143,8 @@ class TransformerDataModule:
             collate_fn=self.data_collator,
             shuffle=True,
             generator=self.generator,
+            num_workers=multiprocessing.cpu_count(),
+            pin_memory=True,
         )
 
     def val_dataloader(self) -> torchd.DataLoader:

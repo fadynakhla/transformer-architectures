@@ -12,6 +12,7 @@ numpy = "^1.24.2"
 tiktoken = "^0.8.0"
 pydantic = "^2.10.5"
 aim = "^3.27.0"
+nltk = "^3.9.1"
 
 
 [tool.poetry.group.dev.dependencies]

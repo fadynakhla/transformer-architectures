@@ -165,6 +165,14 @@ class Tokenizer(tokenization.BaseTokenizer):
             decoder_attention_mask=decoder_mask,
         )
 
+    def batch_decode(self, token_ids: list[list[int]] | torch.Tensor) -> list[str]:
+        token_ids = token_ids.tolist() if isinstance(token_ids, torch.Tensor) else token_ids
+        token_ids = [
+            [tid for tid in seq if tid not in self.special_tokens.values()]
+            for seq in token_ids
+        ]
+        return self.encoding.decode_batch(token_ids, errors="replace")
+
     def pad(
         self,
         batch: list[dict[str, list[int]]],
@@ -253,3 +261,13 @@ class Tokenizer(tokenization.BaseTokenizer):
         if pad_len > self.model_max_len and truncation:
             pad_len = self.model_max_len
         return pad_len
+
+
+if __name__ == "__main__":
+    tokenizer = Tokenizer("r50k_base", 512, pad_token="<pad>", bos_token="<bos>", eos_token="<eos>")
+    enc = tokenizer(["hello", "world"], ["to the world", "to the hello"], return_tensors=True)
+    print(enc)
+
+    print(tokenizer.encoding.special_tokens_set)
+    print(tokenizer.batch_decode(enc.input_ids))
+    print(tokenizer.batch_decode(enc.decoder_input_ids))
