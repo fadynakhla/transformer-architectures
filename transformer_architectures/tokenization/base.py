@@ -14,17 +14,17 @@ class BaseTokenizer:
         additional_special_tokens: Optional[set[str]] = None,
     ) -> None:
         base_encoding = tiktoken.get_encoding(encoding_name=base_encoding_name)
-        special_tokens = self._get_special_tokens(
+        self.special_tokens = self._get_special_tokens(
             pad_token, bos_token, eos_token, additional_special_tokens
         )
-        self.encoding = self._get_encoding_from_base(base_encoding, special_tokens)
+        self.encoding = self._get_encoding_from_base(base_encoding, self.special_tokens)
         self.model_max_len = model_max_len
         self.pad_token = pad_token
-        self.pad_token_id = special_tokens[pad_token] if pad_token else None
+        self.pad_token_id = self.special_tokens[pad_token] if pad_token else None
         self.bos_token = bos_token
-        self.bos_token_id = special_tokens[bos_token] if bos_token else None
+        self.bos_token_id = self.special_tokens[bos_token] if bos_token else None
         self.eos_token = eos_token
-        self.eos_token_id = special_tokens[eos_token] if eos_token else None
+        self.eos_token_id = self.special_tokens[eos_token] if eos_token else None
 
     @classmethod
     def _get_special_tokens(
@@ -68,12 +68,17 @@ class BaseTokenizer:
             pat_str=base_encoding._pat_str,
             mergeable_ranks=mergable_ranks,
             special_tokens=special_tokens,
+            explicit_n_vocab=len(mergable_ranks) + num_special,
         )
+
+    @property
+    def vocab_size(self) -> int:
+        return self.encoding.n_vocab
 
 
 if __name__ == "__main__":
     tokenizer = BaseTokenizer(
-        "cl100k_base",
+        "r50k_base",
         pad_token="<pad>",
         bos_token="<bos>",
         eos_token="<eos>",
@@ -82,5 +87,13 @@ if __name__ == "__main__":
     print("Derived Encoding: ")
     print(tokenizer.encoding.special_tokens_set)
     print(len(tokenizer.encoding._mergeable_ranks))
+    i = 0
+    for k, v in tokenizer.encoding._mergeable_ranks.items():
+        if i == 5:
+            break
+        print(f"Mergeable rank: bpe {k!r}, index {v}")
+        i += 1
     print(tokenizer.encoding.n_vocab)
+    print(tokenizer.encoding.max_token_value + 1)
     print(tokenizer.bos_token_id)
+    print(tokenizer.eos_token_id)

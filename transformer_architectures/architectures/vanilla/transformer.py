@@ -20,6 +20,7 @@ class Transformer(nn.Module):
         super().__init__()
         self.pre_layernorm = False
         self.is_encoder_decoder = True
+        self.vocab_size = vocab_size
         self.learned_embeddings = nn.Embedding(
             num_embeddings=vocab_size, embedding_dim=embed_dim
         )
