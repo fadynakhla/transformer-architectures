@@ -39,3 +39,7 @@ no_lines_before=["STDLIB"]
 [[tool.mypy.overrides]]
 module = "aim.*"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "nltk.*"
+ignore_missing_imports = true

@@ -1,17 +1,16 @@
-import math
 from typing import Callable, Optional
+import math
 
 import aim
-from nltk.translate import bleu_score, gleu_score
-import tqdm
 import pydantic
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import tqdm
+from nltk.translate import bleu_score, gleu_score
 
 from transformer_architectures.architectures import vanilla
 from transformer_architectures.dataloading import wmt_en_fr
-
 
 IGNORE_ID = -100
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -44,7 +43,12 @@ class ModelConfig(pydantic.BaseModel):
 
 model_config = ModelConfig()
 train_config = TrainingConfig(
-    batch_size=8, grad_accumulation_steps=16, learning_rate=1, warmup_steps=4000, epochs=50, label_smoothing=0.1
+    batch_size=8,
+    grad_accumulation_steps=16,
+    learning_rate=1,
+    warmup_steps=4000,
+    epochs=50,
+    label_smoothing=0.1,
 )
 run["hparams"] = {
     "batch_size": train_config.batch_size * train_config.grad_accumulation_steps,
@@ -68,16 +72,26 @@ def train() -> None:
     aim_text = aim.Text(text=f"{data_module.train_dataset[0]}")
     run.track(aim_text, name="example", context={"subset": "train"})
     model = model.to(DEVICE)
-    criterion = nn.CrossEntropyLoss(ignore_index=IGNORE_ID, label_smoothing=train_config.label_smoothing)
+    criterion = nn.CrossEntropyLoss(
+        ignore_index=IGNORE_ID, label_smoothing=train_config.label_smoothing
+    )
     optimizer = optim.Adam(model.parameters(), lr=train_config.learning_rate)
     scheduler = optim.lr_scheduler.LambdaLR(
         optimizer, make_schedule(model_config.embed_dim, train_config.warmup_steps)
     )
     global_step = 0
     for epoch in range(train_config.epochs):
-        global_step = train_epoch(model, data_module, criterion, optimizer, scheduler, train_config.grad_accumulation_steps, epoch, global_step)
+        global_step = train_epoch(
+            model,
+            data_module,
+            criterion,
+            optimizer,
+            scheduler,
+            train_config.grad_accumulation_steps,
+            epoch,
+            global_step,
+        )
         eval_epoch(model, data_module, criterion, epoch)
-
 
 
 def train_epoch(
@@ -95,7 +109,9 @@ def train_epoch(
     dataloader = data_module.train_dataloader()
     total_batches = len(dataloader)
     total_groups = math.ceil(total_batches / gradient_accumulation_steps)
-    final_group_size = total_batches % gradient_accumulation_steps or gradient_accumulation_steps
+    final_group_size = (
+        total_batches % gradient_accumulation_steps or gradient_accumulation_steps
+    )
     accumulated_loss = 0.0
 
     progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
@@ -112,7 +128,11 @@ def train_epoch(
             batch.target.view(-1),
         )
         current_group = i // gradient_accumulation_steps + 1
-        accumulation_steps = final_group_size if current_group == total_groups else gradient_accumulation_steps
+        accumulation_steps = (
+            final_group_size
+            if current_group == total_groups
+            else gradient_accumulation_steps
+        )
         loss /= accumulation_steps
         loss.backward()
         accumulated_loss += loss.item()
@@ -120,8 +140,19 @@ def train_epoch(
         if (i + 1) % gradient_accumulation_steps == 0 or i == total_batches - 1:
             optimizer.step()
             scheduler.step()
-            run.track(accumulated_loss, name="train_loss", step=global_step, epoch=epoch, context={"subset": "train"})
-            run.track(scheduler.get_last_lr()[0], name="learning_rate", step=global_step, context={"subset": "train"})
+            run.track(
+                accumulated_loss,
+                name="train_loss",
+                step=global_step,
+                epoch=epoch,
+                context={"subset": "train"},
+            )
+            run.track(
+                scheduler.get_last_lr()[0],
+                name="learning_rate",
+                step=global_step,
+                context={"subset": "train"},
+            )
 
             progress_bar.update(1)
             progress_bar.set_postfix({"loss": accumulated_loss})
@@ -161,9 +192,16 @@ def eval_epoch(
             )
             total_loss += loss.item()
             predicted_sequences = torch.argmax(predictions, dim=-1)
-            hypotheses.extend([p.split() for p in data_module.tokenizer.batch_decode(predicted_sequences)])
+            hypotheses.extend(
+                [
+                    p.split()
+                    for p in data_module.tokenizer.batch_decode(predicted_sequences)
+                ]
+            )
             targets = torch.masked_fill(batch.target, batch.target == IGNORE_ID, 0)
-            references.extend([[t.split()] for t in data_module.tokenizer.batch_decode(targets)])
+            references.extend(
+                [[t.split()] for t in data_module.tokenizer.batch_decode(targets)]
+            )
 
     avg_loss = total_loss / len(dataloader)
     run.track(avg_loss, name="eval_loss", epoch=epoch, context={"subset": "eval"})
@@ -200,13 +238,14 @@ def load_data() -> list[vanilla.SourceTarget]:
         for en, fr in wmt_en_fr.load_parallel_sentences("/data/datasets/wmt/en-fr")
     ]
 
+
 def make_schedule(model_size: int, warmump_steps: int) -> Callable[[int], float]:
     def schedule(step: int) -> float:
         if step == 0:
             step = 1
-        return model_size ** -0.5 * min(step ** -0.5, step * warmump_steps ** -1.5)
-    return schedule
+        return model_size**-0.5 * min(step**-0.5, step * warmump_steps**-1.5)
 
+    return schedule
 
 
 if __name__ == "__main__":
