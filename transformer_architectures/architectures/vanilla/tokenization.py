@@ -166,7 +166,9 @@ class Tokenizer(tokenization.BaseTokenizer):
         )
 
     def batch_decode(self, token_ids: list[list[int]] | torch.Tensor) -> list[str]:
-        token_ids = token_ids.tolist() if isinstance(token_ids, torch.Tensor) else token_ids
+        token_ids = (
+            token_ids.tolist() if isinstance(token_ids, torch.Tensor) else token_ids
+        )
         token_ids = [
             [tid for tid in seq if tid not in self.special_tokens.values()]
             for seq in token_ids
@@ -264,8 +266,12 @@ class Tokenizer(tokenization.BaseTokenizer):
 
 
 if __name__ == "__main__":
-    tokenizer = Tokenizer("r50k_base", 512, pad_token="<pad>", bos_token="<bos>", eos_token="<eos>")
-    enc = tokenizer(["hello", "world"], ["to the world", "to the hello"], return_tensors=True)
+    tokenizer = Tokenizer(
+        "r50k_base", 512, pad_token="<pad>", bos_token="<bos>", eos_token="<eos>"
+    )
+    enc = tokenizer(
+        ["hello", "world"], ["to the world", "to the hello"], return_tensors=True
+    )
     print(enc)
 
     print(tokenizer.encoding.special_tokens_set)
