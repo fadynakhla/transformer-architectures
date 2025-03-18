@@ -63,7 +63,6 @@ class Transformer(nn.Module):
             is_encoder_decoder=self.is_encoder_decoder,
         )
         self.lm_head = decoder.LMHead(vocab_size=vocab_size, embed_dim=embed_dim)
-        # self.init_weights()
 
     def forward(
         self,
@@ -101,14 +100,6 @@ class Transformer(nn.Module):
                 return decoder_attention_mask & causal_mask
             case _:
                 raise ValueError(f"Invalid dimension of input mask: {mask_dim}")
-
-    def init_weights(self) -> None:
-        """Initialize weights of the model"""
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-            # elif isinstance(module, nn.Embedding):
-            #     nn.init.normal_(module.weight, mean=0, std=self.embed_dim**-0.5)
 
 
 if __name__ == "__main__":
