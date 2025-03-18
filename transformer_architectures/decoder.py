@@ -69,7 +69,7 @@ class LMHead(nn.Module):
         self.lm_head = nn.Linear(embed_dim, vocab_size, bias=False)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return torch.log_softmax(self.lm_head(hidden_states), dim=-1)
+        return self.lm_head(hidden_states)
 
 
 class DecoderForGeneration(Decoder):
@@ -105,4 +105,4 @@ class DecoderForGeneration(Decoder):
         hidden_states = super().forward(
             hidden_states, attention_mask, encoder_output, encoder_attention_mask
         )
-        return self.lm_head(hidden_states)
+        return torch.log_softmax(self.lm_head(hidden_states), dim=-1)

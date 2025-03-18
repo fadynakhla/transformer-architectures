@@ -1,3 +1,4 @@
+from typing import Optional
 import abc
 
 import numpy as np
@@ -8,9 +9,10 @@ POS_ENCODING_PERIOD = 10000
 
 
 class PositionalEncoding(abc.ABC, nn.Module):
-    def __init__(self, embed_dim: int) -> None:
+    def __init__(self, embed_dim: int, dropout: Optional[float]) -> None:
         super().__init__()
         self.embed_dim = embed_dim
+        self.dropout = nn.Dropout(dropout) if dropout is not None else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass for the positional encoding.
@@ -21,7 +23,10 @@ class PositionalEncoding(abc.ABC, nn.Module):
         Returns:
             torch.Tensor: sum of input and positional encoding
         """
-        return x + self.positional_encoding(x).to(device=x.device)
+        x = x + self.positional_encoding(x).to(device=x.device)
+        if self.dropout:
+            x = self.dropout(x)
+        return x
 
     @abc.abstractmethod
     def positional_encoding(self, x: torch.Tensor) -> torch.Tensor:
@@ -41,8 +46,8 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
     the method described in the paper "Attention Is All You Need".
     """
 
-    def __init__(self, embed_dim: int) -> None:
-        super().__init__(embed_dim)
+    def __init__(self, embed_dim: int, dropout: Optional[float]) -> None:
+        super().__init__(embed_dim, dropout)
         self.set_encoding_period()
 
     def set_encoding_period(self, period: int = POS_ENCODING_PERIOD) -> None:

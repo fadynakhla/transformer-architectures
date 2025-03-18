@@ -5,6 +5,18 @@ from transformer_architectures import decoder, encoder, masking
 from transformer_architectures.positional_encoding import positional_encoding
 
 
+class Embedding(nn.Module):
+    def __init__(self, vocab_size: int, embed_dim: int) -> None:
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.embeddings = nn.Embedding(
+            num_embeddings=vocab_size, embedding_dim=embed_dim
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.embeddings(x) * (self.embed_dim**0.5)
+
+
 class Transformer(nn.Module):
     """Implementation of the original Trasnformer"""
 
@@ -21,11 +33,17 @@ class Transformer(nn.Module):
         self.pre_layernorm = False
         self.is_encoder_decoder = True
         self.vocab_size = vocab_size
-        self.learned_embeddings = nn.Embedding(
-            num_embeddings=vocab_size, embedding_dim=embed_dim
+        self.encoder_embeddings = nn.Sequential(
+            Embedding(vocab_size=vocab_size, embed_dim=embed_dim),
+            positional_encoding.SinusoidalPositionalEncoding(
+                embed_dim, dropout=dropout
+            ),
         )
-        self.positional_encoding = positional_encoding.SinusoidalPositionalEncoding(
-            embed_dim
+        self.decoder_embeddings = nn.Sequential(
+            Embedding(vocab_size=vocab_size, embed_dim=embed_dim),
+            positional_encoding.SinusoidalPositionalEncoding(
+                embed_dim, dropout=dropout
+            ),
         )
         self.encoder = encoder.Encoder(
             num_stacks=num_stacks,
@@ -53,12 +71,8 @@ class Transformer(nn.Module):
         decoder_input: torch.Tensor,
         decoder_attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        input_embeddings = self.positional_encoding(
-            self.learned_embeddings(encoder_input)
-        )
-        decoder_embeddings = self.positional_encoding(
-            self.learned_embeddings(decoder_input)
-        )
+        input_embeddings = self.encoder_embeddings(encoder_input)
+        decoder_embeddings = self.decoder_embeddings(decoder_input)
 
         encoder_output = self.encoder(input_embeddings, encoder_attention_mask)
         decoder_attention_mask = self.suplement_causal_mask(decoder_attention_mask)

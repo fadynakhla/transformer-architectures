@@ -13,6 +13,7 @@ tiktoken = "^0.8.0"
 pydantic = "^2.10.5"
 aim = "^3.27.0"
 nltk = "^3.9.1"
+loguru = "^0.7.3"
 
 
 [tool.poetry.group.dev.dependencies]
