@@ -27,7 +27,7 @@ def load_parallel_sentences(
     ) as f2:
         i = 0
         for line1, line2 in zip(f1, f2):
-            if i == 200000:
+            if i == 100000:
                 break
             yield line1.strip(), line2.strip()
             i += 1

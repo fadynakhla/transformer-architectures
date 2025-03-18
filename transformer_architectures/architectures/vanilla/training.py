@@ -2,6 +2,7 @@ from typing import Callable, Optional
 import math
 
 import aim
+import loguru
 import pydantic
 import torch
 import torch.nn as nn
@@ -11,14 +12,19 @@ from nltk.translate import bleu_score, gleu_score
 
 from transformer_architectures.architectures import vanilla
 from transformer_architectures.dataloading import wmt_en_fr
+from transformer_architectures.training import checkpointing, grad_logging
 
 IGNORE_ID = -100
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+NAME = "vanilla_transformer_large"
+
+
+logger = loguru.logger
 
 run = aim.Run(
     repo="aim://0.0.0.0:53800",
-    experiment="Vanilla Transformer - ENFR",
+    experiment="Vanilla Transformer Large - ENFR",
 )
 
 
@@ -35,15 +41,15 @@ class ModelConfig(pydantic.BaseModel):
     encoding: str = "r50k_base"
     model_max_len: int = 512
     num_stacks: int = 6
-    embed_dim: int = 512
-    num_heads: int = 8
-    ff_dim: int = 2048
-    dropout: float = 0.1
+    embed_dim: int = 1024
+    num_heads: int = 16
+    ff_dim: int = 4096
+    dropout: float = 0.3
 
 
 model_config = ModelConfig()
 train_config = TrainingConfig(
-    batch_size=8,
+    batch_size=4,
     grad_accumulation_steps=16,
     learning_rate=1,
     warmup_steps=4000,
@@ -75,11 +81,14 @@ def train() -> None:
     criterion = nn.CrossEntropyLoss(
         ignore_index=IGNORE_ID, label_smoothing=train_config.label_smoothing
     )
-    optimizer = optim.Adam(model.parameters(), lr=train_config.learning_rate)
+    optimizer = optim.Adam(
+        model.parameters(), lr=train_config.learning_rate, betas=(0.9, 0.98), eps=1e-9
+    )
     scheduler = optim.lr_scheduler.LambdaLR(
         optimizer, make_schedule(model_config.embed_dim, train_config.warmup_steps)
     )
     global_step = 0
+    max_bleu = 0.0
     for epoch in range(train_config.epochs):
         global_step = train_epoch(
             model,
@@ -91,7 +100,13 @@ def train() -> None:
             epoch,
             global_step,
         )
-        eval_epoch(model, data_module, criterion, epoch)
+        bleu, _ = eval_epoch(model, data_module, criterion, epoch)
+        if bleu > max_bleu:
+            logger.info(f"New best BLEU score: {bleu}. Saving checkpoint.")
+            max_bleu = bleu
+            checkpointing.save_checkpoint(
+                model, optimizer, scheduler, data_module.generator, NAME, run, epoch
+            )
 
 
 def train_epoch(
@@ -116,6 +131,8 @@ def train_epoch(
 
     progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
     for i, batch in enumerate(dataloader):
+        if i == 0:
+            log_batch(batch, global_step, epoch)
         batch.to(DEVICE)
         predictions = model(
             encoder_input=batch.input_ids,
@@ -135,7 +152,7 @@ def train_epoch(
         )
         loss /= accumulation_steps
         loss.backward()
-        accumulated_loss += loss.item()
+        accumulated_loss += loss.detach().item()
 
         if (i + 1) % gradient_accumulation_steps == 0 or i == total_batches - 1:
             optimizer.step()
@@ -153,6 +170,8 @@ def train_epoch(
                 step=global_step,
                 context={"subset": "train"},
             )
+            if global_step % 50 == 0:
+                grad_logging.async_log(run, model, global_step, epoch)
 
             progress_bar.update(1)
             progress_bar.set_postfix({"loss": accumulated_loss})
@@ -169,7 +188,7 @@ def eval_epoch(
     data_module: vanilla.TransformerDataModule,
     criterion: nn.CrossEntropyLoss,
     epoch: int,
-) -> None:
+) -> tuple[float, float]:
     model.eval()
     total_loss = 0.0
 
@@ -177,9 +196,9 @@ def eval_epoch(
     references: list[list[list[str]]] = []
 
     dataloader = data_module.test_dataloader()
-    for batch in dataloader:
-        batch.to(DEVICE)
-        with torch.no_grad():
+    with torch.no_grad():
+        for i, batch in enumerate(dataloader):
+            batch.to(DEVICE)
             predictions = model(
                 encoder_input=batch.input_ids,
                 encoder_attention_mask=batch.attention_mask,
@@ -202,6 +221,22 @@ def eval_epoch(
             references.extend(
                 [[t.split()] for t in data_module.tokenizer.batch_decode(targets)]
             )
+            if i == 0 and epoch % 5 == 0:
+                for j, (h, r) in enumerate(zip(hypotheses, references)):
+                    hyp_text = aim.Text(text=f"{h}")
+                    ref_text = aim.Text(text=f"{r}")
+                    run.track(
+                        hyp_text,
+                        name=f"eval_sample_{j}",
+                        epoch=epoch,
+                        context={"subset": "hypothesis"},
+                    )
+                    run.track(
+                        ref_text,
+                        name=f"eval_sample_{j}",
+                        epoch=epoch,
+                        context={"subset": "references"},
+                    )
 
     avg_loss = total_loss / len(dataloader)
     run.track(avg_loss, name="eval_loss", epoch=epoch, context={"subset": "eval"})
@@ -209,6 +244,7 @@ def eval_epoch(
     run.track(gleu, name="gleu", epoch=epoch, context={"subset": "eval"})
     bleu = bleu_score.corpus_bleu(references, hypotheses)
     run.track(bleu, name="bleu", epoch=epoch, context={"subset": "eval"})
+    return bleu, gleu
 
 
 def make_tokenizer_and_model(
@@ -239,13 +275,40 @@ def load_data() -> list[vanilla.SourceTarget]:
     ]
 
 
-def make_schedule(model_size: int, warmump_steps: int) -> Callable[[int], float]:
+def make_schedule(model_size: int, warmup_steps: int) -> Callable[[int], float]:
     def schedule(step: int) -> float:
         if step == 0:
             step = 1
-        return model_size**-0.5 * min(step**-0.5, step * warmump_steps**-1.5)
+        return model_size**-0.5 * min(step**-0.5, step * warmup_steps**-1.5)
 
     return schedule
+
+
+def log_batch(batch: vanilla.LabeledBatch, step: int, epoch) -> None:
+    input_text = aim.Text(text=f"{batch.input_ids}")
+    decoder_text = aim.Text(text=f"{batch.decoder_input_ids}")
+    target_text = aim.Text(text=f"{batch.target}")
+    run.track(
+        input_text,
+        name="sample_batch",
+        step=step,
+        epoch=epoch,
+        context={"subset": "input_ids"},
+    )
+    run.track(
+        decoder_text,
+        name="sample_batch",
+        step=step,
+        epoch=epoch,
+        context={"subset": "decoder_input_ids"},
+    )
+    run.track(
+        target_text,
+        name="sample_batch",
+        step=step,
+        epoch=epoch,
+        context={"subset": "target"},
+    )
 
 
 if __name__ == "__main__":

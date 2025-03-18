@@ -8,9 +8,9 @@ from torch.nn import functional as F
 
 
 class Attention(nn.Module, metaclass=abc.ABCMeta):
-    def __init__(self, dropout: float) -> None:
+    def __init__(self, dropout: Optional[float]) -> None:
         super().__init__()
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout) if dropout is not None else None
 
     @abc.abstractmethod
     def forward(
@@ -34,7 +34,7 @@ class ScaledDotProductAttention(Attention):
         d_k = query.size(-1)
         scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
         if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
+            scores = scores.masked_fill(mask == 0, float("-inf"))
         attention = F.softmax(scores, dim=-1)
         if self.dropout:
             attention = self.dropout(attention)

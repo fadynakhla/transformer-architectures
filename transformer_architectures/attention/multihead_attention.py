@@ -110,6 +110,7 @@ class AttentionLayerFromConfigMixin(abc.ABC):
         num_heads: int,
         attention: attn_fns.Attention,
         pre_layernorm: bool,
+        dropout: float = 0.1,
     ) -> None:
         """Needs to be implemented by subclasses."""
 
@@ -152,6 +153,7 @@ class SelfAttentionSubLayer(nn.Module, AttentionLayerFromConfigMixin):
         num_heads: int,
         attention: attn_fns.Attention,
         pre_layernorm: bool,
+        dropout: float = 0.1,
     ) -> None:
         """Generic self-attention sublayer.
 
@@ -175,28 +177,27 @@ class SelfAttentionSubLayer(nn.Module, AttentionLayerFromConfigMixin):
         """
         super().__init__()
         self.attention = MultiHeadAttention(num_heads, embed_dim, attention)
-        self.layer_norm = layernorm.LayerNorm(embed_dim) if pre_layernorm else None
-        post_layernorm = not pre_layernorm
-        self.residual_connection = residual.ResidualConnection(
-            hidden_size=embed_dim,
-            normalize_outputs=post_layernorm,
-        )
+        self.pre_layernorm = pre_layernorm
+        self.layer_norm = layernorm.LayerNorm(embed_dim)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        normed_hidden_states = hidden_states
-        if self.layer_norm:
-            normed_hidden_states = self.layer_norm(normed_hidden_states)
-        attention_output, attention = self.attention(
-            normed_hidden_states,
-            normed_hidden_states,
-            normed_hidden_states,
+        outputs = hidden_states
+        if self.pre_layernorm:
+            outputs = self.layer_norm(outputs)
+        outputs, attention = self.attention(
+            outputs,
+            outputs,
+            outputs,
             attention_mask=attention_mask,
         )
-        outputs = self.residual_connection(hidden_states, attention_output)
+        outputs = hidden_states + self.dropout(outputs)
+        if not self.pre_layernorm:
+            outputs = self.layer_norm(outputs)
         return outputs, attention
 
 
@@ -207,6 +208,7 @@ class CrossAttentionSubLayer(nn.Module, AttentionLayerFromConfigMixin):
         num_heads: int,
         attention: attn_fns.Attention,
         pre_layernorm: bool,
+        dropout: float = 0.1,
     ) -> None:
         """Generic cross-attention sublayer.
 
@@ -230,12 +232,9 @@ class CrossAttentionSubLayer(nn.Module, AttentionLayerFromConfigMixin):
         """
         super().__init__()
         self.attention = MultiHeadAttention(num_heads, embed_dim, attention)
-        self.layer_norm = layernorm.LayerNorm(embed_dim) if pre_layernorm else None
-        post_layernorm = not pre_layernorm
-        self.residual_connection = residual.ResidualConnection(
-            hidden_size=embed_dim,
-            normalize_outputs=post_layernorm,
-        )
+        self.pre_layernorm = pre_layernorm
+        self.layer_norm = layernorm.LayerNorm(embed_dim)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
@@ -243,14 +242,16 @@ class CrossAttentionSubLayer(nn.Module, AttentionLayerFromConfigMixin):
         encoder_hidden_states: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        normed_hidden_states = hidden_states
-        if self.layer_norm:
-            normed_hidden_states = self.layer_norm(normed_hidden_states)
-        attention_output, attention = self.attention(
-            normed_hidden_states,
+        outputs = hidden_states
+        if self.pre_layernorm:
+            outputs = self.layer_norm(outputs)
+        outputs, attention = self.attention(
+            outputs,
             encoder_hidden_states,
             encoder_hidden_states,
             attention_mask=encoder_attention_mask,
         )
-        outputs = self.residual_connection(hidden_states, attention_output)
+        outputs = hidden_states + self.dropout(outputs)
+        if not self.pre_layernorm:
+            outputs = self.layer_norm(outputs)
         return outputs, attention

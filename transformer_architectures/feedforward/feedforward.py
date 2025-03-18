@@ -21,24 +21,22 @@ class FeedForwardSubLayer(nn.Module):
         dropout: float,
     ):
         super().__init__()
-        layers = [
+        self.ffn = nn.Sequential(
             nn.Linear(hidden_size, ff_size),
+            nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(ff_size, hidden_size),
-        ]
-        self.layers = nn.ModuleList(layers)
-        self.layer_norm = layernorm.LayerNorm(hidden_size) if pre_layernorm else None
-        post_layernorm = not pre_layernorm
-        self.residual_connection = residual.ResidualConnection(
-            hidden_size=hidden_size,
-            normalize_outputs=post_layernorm,
         )
+        self.pre_layernorm = pre_layernorm
+        self.layer_norm = layernorm.LayerNorm(hidden_size)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         output = hidden_states
-        if self.layer_norm:
+        if self.pre_layernorm:
             output = self.layer_norm(output)
-        for layer in self.layers:
-            output = layer(output)
-        output = self.residual_connection(hidden_states, output)
+        output = self.ffn(output)
+        output = hidden_states + self.dropout(output)
+        if not self.pre_layernorm:
+            output = self.layer_norm(output)
         return output

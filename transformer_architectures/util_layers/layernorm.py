@@ -3,13 +3,13 @@ from torch import nn
 
 
 class LayerNorm(nn.Module):
-    def __init__(self, hidden_size: int, eps: float = 1e-5) -> None:
+    def __init__(self, hidden_size: int, eps: float = 1e-6) -> None:
         """Initialize LayerNorm module.
 
         Args:
             hidden_size (int): Size of input tensor.
             eps (float, optional): Add to std denominator to prevent div
-              by zero. Defaults to 1e-5.
+              by zero. Defaults to 1e-6.
         """
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
@@ -29,5 +29,5 @@ class LayerNorm(nn.Module):
             torch.Tensor: normed and scaled tensor.
         """
         mean = input.mean(-1, keepdim=True)
-        std = input.std(-1, keepdim=True)
+        std = input.std(-1, keepdim=True, unbiased=False)
         return self.weight * (input - mean) / (std + self.eps) + self.bias
