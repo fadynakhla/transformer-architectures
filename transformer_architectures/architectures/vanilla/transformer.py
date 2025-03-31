@@ -30,7 +30,7 @@ class Transformer(nn.Module):
         dropout: float,
     ) -> None:
         super().__init__()
-        self.pre_layernorm = False
+        self.pre_layernorm = True
         self.is_encoder_decoder = True
         self.vocab_size = vocab_size
         self.encoder_embeddings = nn.Sequential(
@@ -63,6 +63,7 @@ class Transformer(nn.Module):
             is_encoder_decoder=self.is_encoder_decoder,
         )
         self.lm_head = decoder.LMHead(vocab_size=vocab_size, embed_dim=embed_dim)
+        # self.tie_weights()
 
     def forward(
         self,
@@ -71,10 +72,27 @@ class Transformer(nn.Module):
         decoder_input: torch.Tensor,
         decoder_attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        input_embeddings = self.encoder_embeddings(encoder_input)
-        decoder_embeddings = self.decoder_embeddings(decoder_input)
+        encoder_out = self.encode(encoder_input, encoder_attention_mask)
+        return self.decode(
+            decoder_input, decoder_attention_mask, encoder_out, encoder_attention_mask
+        )
 
-        encoder_output = self.encoder(input_embeddings, encoder_attention_mask)
+    def encode(
+        self, encoder_input: torch.Tensor, encoder_attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Encode the input sequence."""
+        input_embeddings = self.encoder_embeddings(encoder_input)
+        return self.encoder(input_embeddings, encoder_attention_mask)
+
+    def decode(
+        self,
+        decoder_input: torch.Tensor,
+        decoder_attention_mask: torch.Tensor,
+        encoder_output: torch.Tensor,
+        encoder_attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Decode the input sequence."""
+        decoder_embeddings = self.decoder_embeddings(decoder_input)
         decoder_attention_mask = self.suplement_causal_mask(decoder_attention_mask)
         decoder_output = self.decoder(
             decoder_embeddings,
@@ -82,7 +100,6 @@ class Transformer(nn.Module):
             encoder_output,
             encoder_attention_mask,
         )
-
         return self.lm_head(decoder_output)
 
     def suplement_causal_mask(
@@ -100,6 +117,13 @@ class Transformer(nn.Module):
                 return decoder_attention_mask & causal_mask
             case _:
                 raise ValueError(f"Invalid dimension of input mask: {mask_dim}")
+
+    def tie_weights(self) -> None:
+        """Tie weights of lm head and embeddings"""
+        self.encoder_embeddings[0].embeddings.weight = self.decoder_embeddings[
+            0
+        ].embeddings.weight
+        self.lm_head.lm_head.weight = self.decoder_embeddings[0].embeddings.weight
 
 
 if __name__ == "__main__":

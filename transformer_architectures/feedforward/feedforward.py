@@ -23,7 +23,7 @@ class FeedForwardSubLayer(nn.Module):
         super().__init__()
         self.ffn = nn.Sequential(
             nn.Linear(hidden_size, ff_size),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(ff_size, hidden_size),
         )

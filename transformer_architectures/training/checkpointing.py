@@ -7,6 +7,7 @@ import torch.optim as optim
 
 MODEL_DIR = "/data/trained/"
 
+
 def save_checkpoint(
     model: nn.Module,
     optimizer: optim.Optimizer,

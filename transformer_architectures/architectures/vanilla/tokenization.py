@@ -30,11 +30,12 @@ TensorBatchEncoding = BatchEncoding[
 
 
 class Tokenizer(tokenization.BaseTokenizer):
+    _required_special_tokens: list[str] = ["pad_token", "bos_token", "eos_token"]
     pad_token: str
-    pad_token_id: int
     bos_token: str
-    bos_token_id: int
     eos_token: str
+    pad_token_id: int
+    bos_token_id: int
     eos_token_id: int
 
     def __init__(
@@ -44,7 +45,6 @@ class Tokenizer(tokenization.BaseTokenizer):
         pad_token: Optional[str] = None,
         bos_token: Optional[str] = None,
         eos_token: Optional[str] = None,
-        additional_special_tokens: Optional[set[str]] = None,
     ) -> None:
         pad_token = pad_token or "<pad>"
         bos_token = bos_token or "<bos>"
@@ -52,10 +52,9 @@ class Tokenizer(tokenization.BaseTokenizer):
         super().__init__(
             base_encoding_name,
             model_max_len,
-            pad_token,
-            bos_token,
-            eos_token,
-            additional_special_tokens,
+            pad_token=pad_token,
+            bos_token=bos_token,
+            eos_token=eos_token,
         )
 
     @overload
@@ -275,5 +274,6 @@ if __name__ == "__main__":
     print(enc)
 
     print(tokenizer.encoding.special_tokens_set)
-    print(tokenizer.batch_decode(enc.input_ids))
-    print(tokenizer.batch_decode(enc.decoder_input_ids))
+    print(tokenizer.pad_token_id)
+    # print(tokenizer.batch_decode(enc.input_ids))
+    # print(tokenizer.batch_decode(enc.decoder_input_ids))
