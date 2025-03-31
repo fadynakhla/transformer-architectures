@@ -1,59 +1,79 @@
-from typing import Optional
+from typing import Callable, Optional, Self
 
 import tiktoken
 
 
 class BaseTokenizer:
+    _required_special_tokens: list[str]
+    _name_to_special_token: dict[str, str]
+    _name_to_special_id: dict[str, int]
+
+    def __init_subclass__(cls):
+        for tok_name in cls._required_special_tokens:
+            tok_getter = cls._special_token_getter(tok_name)
+            tok_setter = cls._special_token_setter(tok_name)
+            tok_idx_getter = cls._special_token_idx_getter(tok_name)
+            tok_idx_setter = cls._special_token_idx_setter(tok_name)
+            setattr(cls, tok_name, property(tok_getter, tok_setter))
+            setattr(cls, f"{tok_name}_id", property(tok_idx_getter, tok_idx_setter))
+
     def __init__(
         self,
         base_encoding_name: str,
         model_max_len: int,
-        pad_token: Optional[str] = None,
-        bos_token: Optional[str] = None,
-        eos_token: Optional[str] = None,
-        additional_special_tokens: Optional[set[str]] = None,
+        **special_tokens: str,
     ) -> None:
         base_encoding = tiktoken.get_encoding(encoding_name=base_encoding_name)
-        self.special_tokens = self._get_special_tokens(
-            pad_token, bos_token, eos_token, additional_special_tokens
-        )
+        self._name_to_special_token = special_tokens
+        self._name_to_special_id = self._get_name_to_special_ids(**special_tokens)
+        self.special_tokens = {
+            self._name_to_special_token[k]: self._name_to_special_id[k]
+            for k in special_tokens
+        }
         self.encoding = self._get_encoding_from_base(base_encoding, self.special_tokens)
         self.model_max_len = model_max_len
-        self.pad_token = pad_token
-        self.pad_token_id = self.special_tokens[pad_token] if pad_token else None
-        self.bos_token = bos_token
-        self.bos_token_id = self.special_tokens[bos_token] if bos_token else None
-        self.eos_token = eos_token
-        self.eos_token_id = self.special_tokens[eos_token] if eos_token else None
+
+    @staticmethod
+    def _special_token_getter(tok_name: str) -> Callable[["BaseTokenizer"], str]:
+        def _get_special_token(self) -> str:
+            try:
+                return self._name_to_special_token[tok_name]
+            except KeyError:
+                raise AttributeError(f"Special token {tok_name} not set.")
+        return _get_special_token
+
+    @staticmethod
+    def _special_token_setter(tok_name: str) -> Callable[["BaseTokenizer", str], None]:
+        def _set_special_token(self, value: str) -> None:
+            self._name_to_special_token[tok_name] = value
+        return _set_special_token
+
+    @staticmethod
+    def _special_token_idx_getter(tok_name: str) -> Callable[["BaseTokenizer"], str]:
+        def _get_special_token_id(self) -> str:
+            try:
+                return self._name_to_special_id[tok_name]
+            except KeyError:
+                raise AttributeError(f"Special token {tok_name} not set.")
+        return _get_special_token_id
+
+    @staticmethod
+    def _special_token_idx_setter(tok_name: str) -> Callable[["BaseTokenizer", int], None]:
+        def _set_special_token_id(self, value: int) -> None:
+            self._name_to_special_id[tok_name] = value
+        return _set_special_token_id
 
     @classmethod
-    def _get_special_tokens(
-        cls,
-        pad_token: Optional[str],
-        bos_token: Optional[str],
-        eos_token: Optional[str],
-        additional_special_tokens: Optional[set[str]],
-    ) -> dict[str, int]:
-        special_tokens = dict[str, int]()
-        if pad_token:
-            special_tokens[pad_token] = 0
-        if bos_token:
-            special_tokens[bos_token] = 1 if pad_token else 0
-        if eos_token:
-            idx = 1 if pad_token else 0
-            idx += 1 if bos_token else 0
-            special_tokens[eos_token] = idx
-        if additional_special_tokens:
-            assert pad_token not in additional_special_tokens
-            assert bos_token not in additional_special_tokens
-            assert eos_token not in additional_special_tokens
-            special_tokens.update(
-                {
-                    tok: i + len(special_tokens)
-                    for i, tok in enumerate(additional_special_tokens)
-                }
-            )
-        return special_tokens
+    def _get_name_to_special_ids(cls, **special_tokens: str) -> dict[str, int]:
+        if (missing := set(cls._required_special_tokens) - set(special_tokens)):
+            raise ValueError(f"Missing required special tokens: {missing}")
+        additional = set(special_tokens) - set(cls._required_special_tokens)
+        name_to_special_id = dict[str, int]()
+        for i, tok_name in enumerate(cls._required_special_tokens):
+            name_to_special_id[tok_name] = i
+        for i, tok_name in enumerate(additional, start=len(cls._required_special_tokens)):
+            name_to_special_id[tok_name] = i
+        return name_to_special_id
 
     @classmethod
     def _get_encoding_from_base(
@@ -95,5 +115,5 @@ if __name__ == "__main__":
         i += 1
     print(tokenizer.encoding.n_vocab)
     print(tokenizer.encoding.max_token_value + 1)
-    print(tokenizer.bos_token_id)
-    print(tokenizer.eos_token_id)
+    # print(tokenizer.bos_token_id)
+    # print(tokenizer.eos_token_id)
