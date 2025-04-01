@@ -1,0 +1,18 @@
+Model:
+  encoding: r50k_base
+  model_max_len: 512
+  num_stacks: 6
+  embed_dim: 1024
+  num_heads: 16
+  ff_dim: 4096
+  dropout: 0.3
+
+Training:
+  batch_size: 4
+  grad_accumulation_steps: 32
+  learning_rate: 4e-4
+  warmup_steps: 3000
+  epochs: 15
+  label_smoothing: 0.1
+  num_samples: 100000
+  log_interval: 50

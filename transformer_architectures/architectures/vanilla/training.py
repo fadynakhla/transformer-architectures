@@ -10,6 +10,7 @@ import torch.optim as optim
 import tqdm
 from nltk.translate import bleu_score, gleu_score
 
+from transformer_architectures import config
 from transformer_architectures.architectures import vanilla
 from transformer_architectures.dataloading import wmt_en_fr
 from transformer_architectures.training import checkpointing, grad_logging
@@ -27,6 +28,7 @@ run = aim.Run(
     experiment="Vanilla Transformer Large - ENFR",
 )
 
+CONFIG_PATH = "configs/vanilla_large.yaml"
 
 class TrainingConfig(pydantic.BaseModel):
     batch_size: int
@@ -35,6 +37,7 @@ class TrainingConfig(pydantic.BaseModel):
     warmup_steps: int
     epochs: int
     label_smoothing: float
+    num_samples: int
     log_interval: int = 50
 
 
@@ -48,15 +51,9 @@ class ModelConfig(pydantic.BaseModel):
     dropout: float = 0.3
 
 
-model_config = ModelConfig()
-train_config = TrainingConfig(
-    batch_size=4,
-    grad_accumulation_steps=32,
-    learning_rate=4e-4,
-    warmup_steps=3000,
-    epochs=15,
-    label_smoothing=0.1,
-)
+model_config = config.load_config(CONFIG_PATH, section="Model", model_class=ModelConfig)
+train_config = config.load_config(CONFIG_PATH, section="Training", model_class=TrainingConfig)
+
 run["hparams"] = {
     "batch_size": train_config.batch_size * train_config.grad_accumulation_steps,
     "grad_accumulation_steps": train_config.grad_accumulation_steps,
@@ -69,7 +66,7 @@ run["hparams"] = {
 def train() -> None:
     tokenizer, model = make_tokenizer_and_model(model_config)
     data_module = vanilla.TransformerDataModule(
-        data=load_data(),
+        data=load_data(train_config.num_samples),
         tokenizer=tokenizer,
         per_device_train_batch_size=train_config.batch_size,
         per_device_eval_batch_size=train_config.batch_size,
@@ -278,10 +275,12 @@ def make_tokenizer_and_model(
     return tokenizer, model
 
 
-def load_data() -> list[vanilla.SourceTarget]:
+def load_data(num_samples: int) -> list[vanilla.SourceTarget]:
     return [
         vanilla.SourceTarget(source=en, target=fr)
-        for en, fr in wmt_en_fr.load_parallel_sentences("/data/datasets/wmt/en-fr")
+        for en, fr in wmt_en_fr.load_parallel_sentences(
+            "/data/datasets/wmt/en-fr", num_samples=num_samples
+        )
     ]
 
 
