@@ -3,7 +3,7 @@ import os
 
 
 def load_parallel_sentences(
-    directory: str, lang1: str = "en", lang2: str = "fr"
+    directory: str, lang1: str = "en", lang2: str = "fr", num_samples: int = 100000
 ) -> Generator[tuple[str, str], None, None]:
     """
     Reads parallel text files from a directory and yields sentence pairs as tuples.
@@ -27,7 +27,7 @@ def load_parallel_sentences(
     ) as f2:
         i = 0
         for line1, line2 in zip(f1, f2):
-            if i == 800000:
+            if i == num_samples:
                 break
             yield line1.strip(), line2.strip()
             i += 1
