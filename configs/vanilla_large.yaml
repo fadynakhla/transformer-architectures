@@ -8,8 +8,8 @@ Model:
   dropout: 0.3
 
 Training:
-  batch_size: 4
-  grad_accumulation_steps: 32
+  batch_size: 8
+  grad_accumulation_steps: 16
   learning_rate: 4e-4
   warmup_steps: 3000
   epochs: 15

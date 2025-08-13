@@ -80,3 +80,23 @@ class BertForSeqClassification(Bert):
                 pooled = encodings[:, 0]
 
         return self.prediction_head(pooled)
+
+
+class BertForTokenClassification(Bert):
+    def __init__(
+        self,
+        vocab_size: int,
+        num_stacks: int,
+        embed_dim: int,
+        num_heads: int,
+        ff_dim: int,
+        dropout: float,
+        n_classes: int,
+    ) -> None:
+        super().__init__(vocab_size, num_stacks, embed_dim, num_heads, ff_dim, dropout)
+        self.prediction_head = nn.Linear(embed_dim, n_classes)
+
+    def forward(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        return self.prediction_head(self.encode(input_ids, attention_mask))
