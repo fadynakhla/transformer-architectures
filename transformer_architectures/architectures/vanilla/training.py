@@ -30,6 +30,7 @@ run = aim.Run(
 
 CONFIG_PATH = "configs/vanilla_large.yaml"
 
+
 class TrainingConfig(pydantic.BaseModel):
     batch_size: int
     grad_accumulation_steps: int
@@ -52,7 +53,9 @@ class ModelConfig(pydantic.BaseModel):
 
 
 model_config = config.load_config(CONFIG_PATH, section="Model", model_class=ModelConfig)
-train_config = config.load_config(CONFIG_PATH, section="Training", model_class=TrainingConfig)
+train_config = config.load_config(
+    CONFIG_PATH, section="Training", model_class=TrainingConfig
+)
 
 run["hparams"] = {
     "batch_size": train_config.batch_size * train_config.grad_accumulation_steps,
@@ -122,7 +125,7 @@ def train_epoch(
     gradient_accumulation_steps: int,
     epoch: int,
     global_step: int,
-    log_interval: int
+    log_interval: int,
 ) -> int:
     model.train()
 
@@ -175,6 +178,7 @@ def train_epoch(
     progress_bar.close()
     return global_step
 
+
 def log_train_metrics(
     model: nn.Module, loss: float, lr: float, epoch: int, step: int
 ) -> None:
@@ -219,10 +223,7 @@ def eval_epoch(
             predicted_sequences, batch.target == IGNORE_ID, 0
         )
         hypotheses.extend(
-            [
-                p.split()
-                for p in data_module.tokenizer.batch_decode(predicted_sequences)
-            ]
+            [p.split() for p in data_module.tokenizer.batch_decode(predicted_sequences)]
         )
         targets = torch.masked_fill(batch.target, batch.target == IGNORE_ID, 0)
         references.extend(

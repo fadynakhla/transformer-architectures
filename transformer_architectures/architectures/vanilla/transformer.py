@@ -1,20 +1,8 @@
 import torch
 from torch import nn
 
-from transformer_architectures import decoder, encoder, masking
+from transformer_architectures import decoder, embedding, encoder, masking
 from transformer_architectures.positional_encoding import positional_encoding
-
-
-class Embedding(nn.Module):
-    def __init__(self, vocab_size: int, embed_dim: int) -> None:
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.embeddings = nn.Embedding(
-            num_embeddings=vocab_size, embedding_dim=embed_dim
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.embeddings(x) * (self.embed_dim**0.5)
 
 
 class Transformer(nn.Module):
@@ -34,13 +22,13 @@ class Transformer(nn.Module):
         self.is_encoder_decoder = True
         self.vocab_size = vocab_size
         self.encoder_embeddings = nn.Sequential(
-            Embedding(vocab_size=vocab_size, embed_dim=embed_dim),
+            embedding.Embedding(vocab_size=vocab_size, embed_dim=embed_dim),
             positional_encoding.SinusoidalPositionalEncoding(
                 embed_dim, dropout=dropout
             ),
         )
         self.decoder_embeddings = nn.Sequential(
-            Embedding(vocab_size=vocab_size, embed_dim=embed_dim),
+            embedding.Embedding(vocab_size=vocab_size, embed_dim=embed_dim),
             positional_encoding.SinusoidalPositionalEncoding(
                 embed_dim, dropout=dropout
             ),
