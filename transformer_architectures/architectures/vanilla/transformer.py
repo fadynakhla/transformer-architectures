@@ -1,5 +1,6 @@
+from typing import Optional
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 from transformer_architectures import decoder, embedding, encoder, masking
 from transformer_architectures.positional_encoding import positional_encoding
@@ -21,17 +22,17 @@ class Transformer(nn.Module):
         self.pre_layernorm = True
         self.is_encoder_decoder = True
         self.vocab_size = vocab_size
-        self.encoder_embeddings = nn.Sequential(
-            embedding.Embedding(vocab_size=vocab_size, embed_dim=embed_dim),
-            positional_encoding.SinusoidalPositionalEncoding(
-                embed_dim, dropout=dropout
-            ),
+        self.encoder_embeddings = embedding.Embedding(
+            vocab_size=vocab_size, embed_dim=embed_dim
         )
-        self.decoder_embeddings = nn.Sequential(
-            embedding.Embedding(vocab_size=vocab_size, embed_dim=embed_dim),
-            positional_encoding.SinusoidalPositionalEncoding(
-                embed_dim, dropout=dropout
-            ),
+        self.encoder_pe = positional_encoding.SinusoidalPositionalEncoding(
+            embed_dim, dropout=dropout
+        )
+        self.decoder_embeddings = embedding.Embedding(
+            vocab_size=vocab_size, embed_dim=embed_dim
+        )
+        self.decoder_pe = positional_encoding.SinusoidalPositionalEncoding(
+            embed_dim, dropout=dropout
         )
         self.encoder = encoder.Encoder(
             num_stacks=num_stacks,
@@ -70,6 +71,7 @@ class Transformer(nn.Module):
     ) -> torch.Tensor:
         """Encode the input sequence."""
         input_embeddings = self.encoder_embeddings(encoder_input)
+        input_embeddings = self.encoder_pe(input_embeddings)
         return self.encoder(input_embeddings, encoder_attention_mask)
 
     def decode(
@@ -81,6 +83,7 @@ class Transformer(nn.Module):
     ) -> torch.Tensor:
         """Decode the input sequence."""
         decoder_embeddings = self.decoder_embeddings(decoder_input)
+        decoder_embeddings = self.decoder_pe(decoder_embeddings)
         decoder_attention_mask = self.suplement_causal_mask(decoder_attention_mask)
         decoder_output = self.decoder(
             decoder_embeddings,
@@ -108,14 +111,14 @@ class Transformer(nn.Module):
 
     def tie_weights(self) -> None:
         """Tie weights of lm head and embeddings"""
-        self.encoder_embeddings[0].embeddings.weight = self.decoder_embeddings[
-            0
-        ].embeddings.weight
-        self.lm_head.lm_head.weight = self.decoder_embeddings[0].embeddings.weight
+        self.encoder_embeddings.embeddings.weight = (
+            self.decoder_embeddings.embeddings.weight
+        )
+        self.lm_head.lm_head.weight = self.decoder_embeddings.embeddings.weight
 
 
 if __name__ == "__main__":
-    device = torch.device("cuda")
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = Transformer(
         vocab_size=50000,
         num_stacks=6,

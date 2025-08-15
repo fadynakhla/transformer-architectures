@@ -1,38 +1,43 @@
-[[tool.poetry.source]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-priority = "explicit"
-
-[tool.poetry]
+[project]
 name = "transformer_architectures"
 version = "0.1.0"
 description = ""
-authors = ["Fady Nakhla <fnakhla23@gmail.com>"]
+authors = [{ name = "Fady Nakhla", email = "fnakhla23@gmail.com" }]
+requires-python = ">=3.11, <3.14"
 readme = "README.md"
+dependencies = [
+    "numpy>=1.24.2,<2",
+    "tiktoken>=0.8.0,<0.9",
+    "pydantic>=2.10.5,<3",
+    "aim>=3.27.0,<4",
+    "nltk>=3.9.1,<4",
+    "loguru>=0.7.3,<0.8",
+    "torch>=2.7.1,<3",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.11, <3.14"
-numpy = "^1.24.2"
-tiktoken = "^0.8.0"
-pydantic = "^2.10.5"
-aim = "^3.27.0"
-nltk = "^3.9.1"
-loguru = "^0.7.3"
-torch = {version = "^2.7.1", source = "pytorch-cu128"}
+[dependency-groups]
+dev = [
+    "mypy>=1.1.1,<2",
+    "black>=23.3.0,<24",
+    "pylint>=3.0.0,<4",
+    "jupyter>=1.0.0,<2",
+    "isort>=6.0.0,<7",
+    "types-tqdm>=4.67.0.20250301,<5",
+]
 
+[tool.uv]
 
-[tool.poetry.group.dev.dependencies]
-mypy = "^1.1.1"
-black = "^23.3.0"
-pylint = "^3.0.0"
-jupyter = "^1.0.0"
-isort = "^6.0.0"
-types-tqdm = "^4.67.0.20250301"
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
-
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.isort]
 known_typing = ["typing"]
@@ -45,9 +50,6 @@ sections = [
   "LOCALFOLDER",
 ]
 no_lines_before = ["STDLIB"]
-
-
-[tool.mypy]
 
 [[tool.mypy.overrides]]
 module = "aim.*"
