@@ -40,7 +40,7 @@ def load_checkpoint(
     generator: torch.Generator,
     run: aim.Run,
 ) -> int:
-    dir = f"/data/trained/vanilla_transformer/run_{run.hash()[:6]}"
+    dir = f"/data/trained/vanilla_transformer/run_{run.hash[:6]}"
     epoch = max(
         [
             int(f.split("_")[-1].split(".")[0])
@@ -49,7 +49,7 @@ def load_checkpoint(
         ]
     )
     checkpoint = torch.load(
-        f"/data/trained/vanilla_transformer/run_{run.hash()[:6]}/epoch_{epoch}.pt"
+        f"/data/trained/vanilla_transformer/run_{run.hash[:6]}/epoch_{epoch}.pt"
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])

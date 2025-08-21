@@ -1,4 +1,4 @@
-from typing import Callable, Optional, Self
+from typing import Callable
 
 import tiktoken
 

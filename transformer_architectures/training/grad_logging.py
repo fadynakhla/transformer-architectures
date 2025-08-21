@@ -39,10 +39,16 @@ def async_log(run: aim.Run, model: nn.Module, step: int, epoch: int) -> None:
     model_grads = {}
 
     for name, param in model.named_parameters():
-        if param.requires_grad:
-            model_params[name] = param.data.cpu().detach()
-            if param.grad is not None:
-                model_grads[f"grad/{name}"] = param.grad.cpu().clone().detach()
+        if not param.requires_grad:
+            continue
+        model_params[name] = param.data.cpu().detach()
+        if param.grad is None:
+            continue
+        model_grads[f"grad/{name}"] = param.grad.cpu().clone().detach()
+        # if param.requires_grad:
+        #     model_params[name] = param.data.cpu().detach()
+        #     if param.grad is not None:
+        #         model_grads[f"grad/{name}"] = param.grad.cpu().clone().detach()
 
     threading.Thread(
         target=log_gradients_and_params,

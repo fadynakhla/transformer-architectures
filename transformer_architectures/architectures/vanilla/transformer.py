@@ -118,6 +118,8 @@ class Transformer(nn.Module):
 
 
 if __name__ == "__main__":
+    import time
+
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = Transformer(
         vocab_size=50000,
@@ -127,12 +129,22 @@ if __name__ == "__main__":
         ff_dim=2048,
         dropout=0.1,
     ).to(device=device)
-    for _ in range(1000):
-        encoder_input = torch.rand(4, 1000).long().to(device=device)
-        encoder_attention_mask = torch.ones(4, 1000).long().to(device=device)
-        decoder_input = torch.rand(4, 587).long().to(device=device)
-        decoder_attention_mask = torch.ones(4, 587).long().to(device=device)
+    iterations = 1000
+    start = time.monotonic()
+    for _ in range(iterations):
+        encoder_input = torch.rand(8, 1000).long().to(device=device)
+        encoder_attention_mask = torch.ones(8, 1000).long().to(device=device)
+        decoder_input = torch.rand(8, 687).long().to(device=device)
+        decoder_attention_mask = torch.ones(8, 687).long().to(device=device)
         output = model(
             encoder_input, encoder_attention_mask, decoder_input, decoder_attention_mask
         )
+    total = time.monotonic() - start
+    print("Run Statistics:")
+    print(f"Total time (s): {total:.2f}")
+    print(f"Iterations: {iterations}")
+    speed = iterations / total if iterations >= total else total / iterations
+    units = "iter/sec" if iterations >= total else "sec/iter"
+    print(f"Speed ({units}): {speed:.2f}")
+    print(f"Device: {device}")
     print(f"Model output shape: {output.shape}")
