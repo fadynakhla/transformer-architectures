@@ -1,4 +1,5 @@
 from typing import Optional, Protocol, TypeVar, runtime_checkable
+import dataclasses
 import math
 import multiprocessing
 
@@ -10,6 +11,7 @@ from transformer_architectures.architectures.vanilla import tokenization
 
 IGNORE_ID = -100
 
+_T_co = TypeVar("_T_co", covariant=True)
 Label = TypeVar("Label", None, torch.Tensor)
 LabelMask = TypeVar("LabelMask", None, torch.Tensor)
 
@@ -19,14 +21,15 @@ class SourceTarget(pydantic.BaseModel):
     target: str
 
 
-class LabeledBatch(pydantic.BaseModel):
+@dataclasses.dataclass
+class LabeledBatch:
     input_ids: torch.Tensor
     attention_mask: torch.Tensor
     decoder_input_ids: torch.Tensor
     decoder_attention_mask: torch.Tensor
     target: torch.Tensor
 
-    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
+    # model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
 
     def to(self, device: torch.device) -> None:
         self.input_ids = self.input_ids.to(device)
@@ -53,7 +56,7 @@ class LabeledBatch(pydantic.BaseModel):
         )
 
 
-class TransformerDataset(torchd.Dataset):
+class TransformerDataset(torchd.Dataset[dict[str, list[int]]]):
     def __init__(
         self, data: list[SourceTarget], tokenizer: tokenization.Tokenizer
     ) -> None:
@@ -92,7 +95,7 @@ class TransformerDataCollator:
         pad_to_multiple_of: Optional[int] = None,
     ) -> None:
         self.tokenizer = tokenizer
-        self.padding = padding
+        self.padding: tokenization.PaddingOptions = padding
         self.label_pad_token_id = label_pad_token_id
         self.pad_to_multiple_of = pad_to_multiple_of
 
@@ -136,7 +139,7 @@ class TransformerDataModule:
             full_dataset, self.val_split, self.test_split, self.generator
         )
 
-    def train_dataloader(self) -> torchd.DataLoader:
+    def train_dataloader(self) -> torchd.DataLoader[dict[str, list[int]]]:
         return torchd.DataLoader(
             dataset=self.train_dataset,
             batch_size=self.per_device_train_batch_size,
@@ -147,7 +150,7 @@ class TransformerDataModule:
             pin_memory=True,
         )
 
-    def val_dataloader(self) -> torchd.DataLoader:
+    def val_dataloader(self) -> torchd.DataLoader[dict[str, list[int]]]:
         return torchd.DataLoader(
             dataset=self.val_dataset,
             batch_size=self.per_device_eval_batch_size,
@@ -155,7 +158,7 @@ class TransformerDataModule:
             shuffle=False,
         )
 
-    def test_dataloader(self) -> torchd.DataLoader:
+    def test_dataloader(self) -> torchd.DataLoader[dict[str, list[int]]]:
         return torchd.DataLoader(
             dataset=self.test_dataset,
             batch_size=self.per_device_eval_batch_size,
@@ -169,21 +172,14 @@ class HasLen(Protocol):
     def __len__(self) -> int:
         ...
 
-
-DatasetType = TypeVar("DatasetType", bound=torchd.Dataset)
-DataSplit = tuple[
-    torchd.Subset[DatasetType],
-    torchd.Subset[DatasetType],
-    torchd.Subset[DatasetType],
-]
-
+DataSplit = tuple[torchd.Subset[_T_co], torchd.Subset[_T_co], torchd.Subset[_T_co]]
 
 def train_val_test_split(
-    dataset: DatasetType,
+    dataset: torchd.Dataset[_T_co],
     val_split: float,
     test_split: float,
     generator: torch.Generator,
-) -> DataSplit:
+) -> DataSplit[_T_co]:
     if not isinstance(dataset, HasLen):
         raise ValueError("Dataset must implement __len__")
     total_size = len(dataset)
