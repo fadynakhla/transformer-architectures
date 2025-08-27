@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Callable
 import math
 
 import aim
@@ -12,7 +12,7 @@ from nltk.translate import bleu_score, gleu_score
 
 from transformer_architectures import config
 from transformer_architectures.architectures import vanilla
-from transformer_architectures.dataloading import wmt_en_fr
+from transformer_architectures.datasets import wmt_en_fr
 from transformer_architectures.training import checkpointing, grad_logging
 
 IGNORE_ID = -100
@@ -305,7 +305,7 @@ def make_cosine_schedule(warmup_steps: int, total_steps: int) -> Callable[[int],
     return schedule
 
 
-def log_batch(batch: vanilla.LabeledBatch, step: int, epoch) -> None:
+def log_batch(batch: vanilla.LabeledBatch, step: int, epoch: int) -> None:
     input_text = aim.Text(text=f"{batch.input_ids}")
     decoder_text = aim.Text(text=f"{batch.decoder_input_ids}")
     target_text = aim.Text(text=f"{batch.target}")

@@ -40,12 +40,14 @@ class BaseTokenizer:
                 return self._name_to_special_token[tok_name]
             except KeyError:
                 raise AttributeError(f"Special token {tok_name} not set.")
+
         return _get_special_token
 
     @staticmethod
     def _special_token_setter(tok_name: str) -> Callable[["BaseTokenizer", str], None]:
         def _set_special_token(self, value: str) -> None:
             self._name_to_special_token[tok_name] = value
+
         return _set_special_token
 
     @staticmethod
@@ -55,23 +57,29 @@ class BaseTokenizer:
                 return self._name_to_special_id[tok_name]
             except KeyError:
                 raise AttributeError(f"Special token {tok_name} not set.")
+
         return _get_special_token_id
 
     @staticmethod
-    def _special_token_idx_setter(tok_name: str) -> Callable[["BaseTokenizer", int], None]:
+    def _special_token_idx_setter(
+        tok_name: str,
+    ) -> Callable[["BaseTokenizer", int], None]:
         def _set_special_token_id(self, value: int) -> None:
             self._name_to_special_id[tok_name] = value
+
         return _set_special_token_id
 
     @classmethod
     def _get_name_to_special_ids(cls, **special_tokens: str) -> dict[str, int]:
-        if (missing := set(cls._required_special_tokens) - set(special_tokens)):
+        if missing := set(cls._required_special_tokens) - set(special_tokens):
             raise ValueError(f"Missing required special tokens: {missing}")
         additional = set(special_tokens) - set(cls._required_special_tokens)
         name_to_special_id = dict[str, int]()
         for i, tok_name in enumerate(cls._required_special_tokens):
             name_to_special_id[tok_name] = i
-        for i, tok_name in enumerate(additional, start=len(cls._required_special_tokens)):
+        for i, tok_name in enumerate(
+            additional, start=len(cls._required_special_tokens)
+        ):
             name_to_special_id[tok_name] = i
         return name_to_special_id
 

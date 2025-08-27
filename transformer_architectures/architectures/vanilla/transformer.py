@@ -1,6 +1,5 @@
-from typing import Optional
 import torch
-from torch import Tensor, nn
+from torch import nn
 
 from transformer_architectures import decoder, embedding, encoder, masking
 from transformer_architectures.positional_encoding import positional_encoding
@@ -147,4 +146,4 @@ if __name__ == "__main__":
     units = "iter/sec" if iterations >= total else "sec/iter"
     print(f"Speed ({units}): {speed:.2f}")
     print(f"Device: {device}")
-    print(f"Model output shape: {output.shape}")
+    print(f"Model output shape: {output.shape}")  # type: ignore
