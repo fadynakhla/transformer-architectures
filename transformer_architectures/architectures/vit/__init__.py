@@ -3,7 +3,10 @@ from transformer_architectures.architectures.vit.data import (
     LabeledImage,
     TransformerDataModule,
 )
-from transformer_architectures.architectures.vit.transformer import VisionTransformer, VisionTransformerForImageClassification
+from transformer_architectures.architectures.vit.transformer import (
+    VisionTransformer,
+    VisionTransformerForImageClassification,
+)
 
 __all__ = [
     "VisionTransformer",

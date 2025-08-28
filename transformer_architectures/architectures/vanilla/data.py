@@ -172,7 +172,9 @@ class HasLen(Protocol):
     def __len__(self) -> int:
         ...
 
+
 DataSplit = tuple[torchd.Subset[_T_co], torchd.Subset[_T_co], torchd.Subset[_T_co]]
+
 
 def train_val_test_split(
     dataset: torchd.Dataset[_T_co],

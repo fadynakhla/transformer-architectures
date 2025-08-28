@@ -6,10 +6,10 @@ help: # Show help for each of the Makefile recipes.
 
 .PHONY: format
 format: # Format code with isort and black
-	poetry run isort transformer_architectures
-	poetry run black transformer_architectures
+	uv run isort transformer_architectures
+	uv run black transformer_architectures
 
 
 .PHONY: typecheck
 typecheck: # Statically type check code using mypy
-	poetry run mypy transformer_architectures
+	uv run mypy transformer_architectures
