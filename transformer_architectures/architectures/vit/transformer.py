@@ -85,7 +85,6 @@ class VisionTransformer(nn.Module):
         self.num_patches = math.ceil(new_size / self.patch_size) ** 2
 
 
-
 class VisionTransformerForImageClassification(VisionTransformer):
     def __init__(
         self,
@@ -96,7 +95,7 @@ class VisionTransformerForImageClassification(VisionTransformer):
         num_heads: int,
         ff_dim: int,
         dropout: float,
-        num_classes: int
+        num_classes: int,
     ) -> None:
         super().__init__(
             patch_size, image_size, num_stacks, embed_dim, num_heads, ff_dim, dropout

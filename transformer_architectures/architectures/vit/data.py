@@ -7,18 +7,22 @@ import multiprocessing
 import os
 import pathlib
 
-import numpy as np
 import torch
+import loguru
 from PIL import Image
 from torch.utils import data as torchd
+from torchvision.io import read_image # pyright: ignore[reportMissingTypeStubs]
+from torchvision.transforms import v2 as transforms  # pyright: ignore[reportMissingTypeStubs]
+
+from transformer_architectures.preprocessing import image_processing
 
 
-IGNORE_ID = -100
+logger = loguru.logger
+
 
 _T_co = TypeVar("_T_co", covariant=True)
 Label = TypeVar("Label", None, torch.Tensor)
 LabelMask = TypeVar("LabelMask", None, torch.Tensor)
-
 
 
 @dataclasses.dataclass
@@ -26,10 +30,18 @@ class LabeledImage:
     image: torch.Tensor
     label: int
 
+
+@dataclasses.dataclass
+class MultiLabeledImageIndex:
+    image_path: str
+    label_indices: list[int]
+    image_id: str | None
+
+
 @dataclasses.dataclass
 class MultiLabeledImage:
     image: torch.Tensor
-    labels: torch.Tensor # multihot shape (n_classes,)
+    labels: torch.Tensor  # multihot shape (n_classes,)
     image_id: str | None
 
 
@@ -43,10 +55,10 @@ class LabeledBatch:
         self.labels = self.labels.to(device)
 
 
-def _img_to_tensor_rgb01(path: str) -> torch.Tensor:
-    img = Image.open(path).convert("RGB")
-    arr = np.asarray(img, dtype=np.float32) / 255.0
-    return torch.from_numpy(arr).permute(2, 0, 1).contiguous()
+# def _img_to_tensor_rgb01(path: str) -> torch.Tensor:
+#     img = Image.open(path).convert("RGB")
+#     arr = np.asarray(img, dtype=np.float32) / 255.0
+#     return torch.from_numpy(arr).permute(2, 0, 1).contiguous()
 
 
 class VisionTransformerDataset(torchd.Dataset[LabeledImage]):
@@ -82,8 +94,9 @@ class VisionTransformerDataset(torchd.Dataset[LabeledImage]):
 
         return processed
 
-
-    def _compute_normalization_stats(self, data: list[LabeledImage]) -> tuple[torch.Tensor, torch.Tensor]:
+    def _compute_normalization_stats(
+        self, data: list[LabeledImage]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         images = torch.stack([item.image for item in data])
         mean = images.mean(dim=(0, 2, 3), keepdim=True)
         std = images.std(dim=(0, 2, 3), keepdim=True)
@@ -99,113 +112,117 @@ class OpenImagesDataset(torchd.Dataset[MultiLabeledImage]):
     def __init__(
         self,
         data_dir: str,
+        annotations_dir: str,
         data_samples: int,
-        image_size: tuple[int, int],
-        resizing_strategy: Literal["skip"] = "skip",
+        image_size: int,
+        resizing_strategy: Literal["stretch", "center_crop"] = "stretch",
         normalize: bool = True,
-        normalization_samples: int | None = None,
+        norm_samples: int | None = None,
         mean: torch.Tensor | None = None,
         std: torch.Tensor | None = None,
     ) -> None:
         super().__init__()
         self.image_size = image_size
-        self.resizing_strategy = resizing_strategy
-        self.normalize = normalize
-        self.mean = mean
-        self.std = std
-        self.mid_to_name = self._mid_to_name(data_dir)
-        data, self.mid_to_index = self._load_data(data_dir, data_samples)
-        self.processed_data = self._process_data(data, normalization_samples)
+        self.mid_to_name = self._mid_to_name(annotations_dir)
+        self.image_id_to_path = self._build_id_to_path(data_dir, data_samples)
+        img_to_mids, used_mids = self._build_label_map(annotations_dir)
+        self.class_mids = sorted(used_mids)
+        self.mid_to_index = {m: i for i, m in enumerate(self.class_mids)}
+        self.num_classes = len(self.class_mids)
+        logger.info("Building image index")
+        self._image_index = self._build_index(img_to_mids)
+        self.transform = self._get_transform(self._image_index, image_size, resizing_strategy, normalize, norm_samples, mean, std)
+
 
     def __len__(self) -> int:
-        return len(self.processed_data)
+        return len(self._image_index)
 
     def __getitem__(self, index: int) -> MultiLabeledImage:
-        return self.processed_data[index]
+        image_data = self._image_index[index]
+        image = read_image(image_data.image_path)
+        image = self.transform(image)
+        labels = torch.zeros(self.num_classes, dtype=torch.float32)
+        labels[image_data.label_indices] = 1.0
+        return MultiLabeledImage(image, labels, image_data.image_id)
 
-    def _load_data(self, data_dir: str, data_samples: int) -> tuple[list[MultiLabeledImage], dict[str, int]]:
-        img_dir = os.path.join(data_dir, "train")
-        ann_dir = os.path.join(data_dir, "annotations")
-        if not os.path.isdir(img_dir):
-            raise FileNotFoundError(f"Images folder not found: {img_dir}")
 
-        labels_csv  = os.path.join(ann_dir, "train-annotations-human-imagelabels.csv")
-        if not os.path.exists(labels_csv):
-            raise FileNotFoundError(f"Missing {labels_csv}")
+    def _build_id_to_path(self, data_dir: str, data_samples: int) -> dict[str, str]:
+        exts = (".jpg", ".jpeg", ".png")
+        id_to_path = {
+            os.path.splitext(f)[0]: os.path.join(data_dir, f)
+            for f in os.listdir(data_dir)[:data_samples]
+            if f.lower().endswith(exts)
+        }
+        if not id_to_path:
+            raise RuntimeError("no images found")
+        return id_to_path
 
-        exts = (".jpg", )
-        id_to_path: dict[str, str] = {}
-        samples_gathered = 0
-        for fname in os.listdir(img_dir):
-            if not fname.lower().endswith(exts):
-                continue
-
-            img_size = get_size(os.path.join(img_dir, fname))
-            if img_size != self.image_size:
-                continue
-
-            img_id = os.path.splitext(fname)[0]
-            id_to_path[img_id] = os.path.join(img_dir, fname)
-            samples_gathered += 1
-            if samples_gathered == data_samples:
-                break
-        present_ids = set(id_to_path.keys())
-        if not present_ids:
-            raise RuntimeError(f"No images found in {img_dir}")
+    def _build_label_map(
+        self, annotations_dir: str
+    ) -> tuple[dict[str, set[str]], set[str]]:
+        labels_csv = os.path.join(
+            annotations_dir, "train-annotations-human-imagelabels.csv"
+        )
 
         img_to_mids: dict[str, set[str]] = collections.defaultdict(set)
         used_mids: set[str] = set()
-
         with open(labels_csv, newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 img_id = row["ImageID"]
-                if img_id not in present_ids:
+                if img_id not in self.image_id_to_path:
                     continue
-                try:
-                    conf = float(row.get("Confidence", "1"))
-                except ValueError:
-                    conf = 1.0
-                if conf != 1.0:
+                if float(row.get("Confidence", "1")) != 1.0:
                     continue
                 mid = row["LabelName"]
                 img_to_mids[img_id].add(mid)
                 used_mids.add(mid)
-        class_mids = sorted(used_mids)
-        mid_to_index = {m: i for i, m in enumerate(class_mids)}
-        img_to_labels = {image: [mid_to_index[m] for m in mids] for image, mids in img_to_mids.items()}
-        num_classes = len(mid_to_index)
 
-        data: list[MultiLabeledImage] = []
-        for img_id, labels in img_to_labels.items():
-            y = torch.zeros(num_classes, dtype=torch.float32)
-            y[labels] = 1.0
-            x = _img_to_tensor_rgb01(id_to_path[img_id])
-            data.append(MultiLabeledImage(image=x, labels=y, image_id=img_id))
+        return img_to_mids, used_mids
 
-        return data, mid_to_index
+    def _build_index(
+        self, img_to_mids: dict[str, set[str]]
+    ) -> list[MultiLabeledImageIndex]:
+        index: list[MultiLabeledImageIndex] = []
+        for img_id, mids in img_to_mids.items():
+            if not mids:
+                continue
+            pos_idx = [self.mid_to_index[m] for m in mids]
+            index.append(
+                MultiLabeledImageIndex(self.image_id_to_path[img_id], pos_idx, img_id)
+            )
+        return index
 
+    def _get_transform(
+        self,
+        data_index: list[MultiLabeledImageIndex],
+        image_size: int,
+        resizing_strategy: Literal["stretch", "center_crop"],
+        normalize: bool,
+        norm_samples: int | None,
+        mean: torch.Tensor | None,
+        std: torch.Tensor | None,
+    ):
+        transform = image_processing.build_transform(image_size, resizing_strategy)
+        if not normalize:
+            return transform
 
+        if mean is None or std is None:
+            logger.info("Computing image set norm stats on {} images", norm_samples or "All")
+            mean, std = self._compute_normalization_stats(data_index, transform, norm_samples)
+        return image_processing.build_transform_with_norm(
+            image_size, resizing_strategy, mean, std
+        )
 
-    def _process_data(self, data: list[MultiLabeledImage], normalization_samples: int | None) -> list[MultiLabeledImage]:
-        if not self.normalize:
-            return data
-        if self.mean is None or self.std is None:
-            self.mean, self.std = self._compute_normalization_stats(data, normalization_samples)
-
-        processed: list[MultiLabeledImage] = []
-        for item in data:
-            normalized_image = (item.image - self.mean) / self.std
-            processed.append(MultiLabeledImage(image=normalized_image, labels=item.labels, image_id=item.image_id))
-
-        return processed
-
-
-    def _compute_normalization_stats(self, data: list[MultiLabeledImage], samples: int | None) -> tuple[torch.Tensor, torch.Tensor]:
-        if samples:
-            images = torch.stack([item.image for item in data[:samples]])
-        else:
-            images = torch.stack([item.image for item in data])
+    def _compute_normalization_stats(
+        self, data_index: list[MultiLabeledImageIndex],
+        transform: transforms.Compose,
+        num_samples: int | None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        samples = data_index
+        if num_samples:
+            samples = data_index[:num_samples]
+        images = torch.stack([transform(read_image(dp.image_path)) for dp in samples])
         mean = images.mean(dim=(0, 2, 3), keepdim=True)
         std = images.std(dim=(0, 2, 3), keepdim=True)
 
@@ -217,10 +234,9 @@ class OpenImagesDataset(torchd.Dataset[MultiLabeledImage]):
 
     @staticmethod
     def _mid_to_name(path: str) -> dict[str, str]:
-        ann_dir = os.path.join(path, "annotations")
-        if not os.path.isdir(ann_dir):
-            raise FileNotFoundError(f"Annotations folder not found: {ann_dir}")
-        class_csv   = os.path.join(ann_dir, "class-descriptions.csv")
+        if not os.path.isdir(path):
+            raise FileNotFoundError(f"Annotations folder not found: {path}")
+        class_csv = os.path.join(path, "class-descriptions.csv")
         if not os.path.exists(class_csv):
             raise FileNotFoundError(f"Missing {class_csv}")
 
@@ -234,7 +250,6 @@ class OpenImagesDataset(torchd.Dataset[MultiLabeledImage]):
 
 
 class ImageDataCollator:
-
     def __call__(self, batch: list[LabeledImage]) -> LabeledBatch:
         images_list: list[torch.Tensor] = []
         labels_list: list[int] = []
@@ -266,9 +281,9 @@ class TransformerDataModule:
     def __init__(
         self,
         data_dir: str,
+        annotations_dir: str,
         data_samples: int,
-        image_size: tuple[int, int],
-        # data: list[MultiLabeledImage],
+        image_size: int,
         per_device_train_batch_size: int,
         per_device_eval_batch_size: int,
         test_split: float = 0.2,
@@ -276,6 +291,7 @@ class TransformerDataModule:
         seed: int = 42,
     ) -> None:
         self.data_dir = data_dir
+        self.annotations_dir = annotations_dir
         self.data_samples = data_samples
         self.image_size = image_size
         # self.data = data
@@ -287,7 +303,9 @@ class TransformerDataModule:
         self.data_collator = MultiLabelDataCollator()
 
     def setup(self) -> None:
-        full_dataset = OpenImagesDataset(self.data_dir, self.data_samples, self.image_size)
+        full_dataset = OpenImagesDataset(
+            self.data_dir, self.annotations_dir, self.data_samples, self.image_size, norm_samples=10000
+        )
         self.mid_to_name = full_dataset.mid_to_name
         self.mid_to_index = full_dataset.mid_to_index
         self.train_dataset, self.val_dataset, self.test_dataset = train_val_test_split(
@@ -327,7 +345,9 @@ class HasLen(Protocol):
     def __len__(self) -> int:
         ...
 
+
 DataSplit = tuple[torchd.Subset[_T_co], torchd.Subset[_T_co], torchd.Subset[_T_co]]
+
 
 def train_val_test_split(
     dataset: torchd.Dataset[_T_co],
@@ -354,8 +374,13 @@ def get_size(path: str | pathlib.Path):
         return None
 
 
-if __name__=="__main__":
-    ds = OpenImagesDataset(data_dir="/data/datasets/downsampled-open-images-v4/512px", data_samples=10, image_size=(512, 512))
+if __name__ == "__main__":
+    ds = OpenImagesDataset(
+        data_dir="/data/datasets/downsampled-open-images-v4/512px/train",
+        annotations_dir="/data/datasets/downsampled-open-images-v4/512px/annotations",
+        data_samples=10,
+        image_size=512,
+    )
     print(ds[1])
     # from PIL import Image
     # from collections import Counter
