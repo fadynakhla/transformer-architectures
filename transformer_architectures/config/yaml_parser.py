@@ -5,7 +5,6 @@ import re
 import pydantic
 import yaml
 
-
 T = TypeVar("T", bound=pydantic.BaseModel)
 
 

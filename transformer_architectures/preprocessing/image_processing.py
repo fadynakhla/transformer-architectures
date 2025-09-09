@@ -1,8 +1,9 @@
-from torchvision.transforms import (  # pyright: ignore[reportMissingTypeStubs]
-    v2 as transforms,
-    InterpolationMode,
-)
 import torch
+from torchvision.transforms import InterpolationMode
+from torchvision.transforms import (
+    v2 as transforms,
+)  # pyright: ignore[reportMissingTypeStubs]
+
 
 def build_transform(image_size: int, mode: str) -> transforms.Compose:
     if mode == "center_crop":
@@ -31,7 +32,9 @@ def build_transform(image_size: int, mode: str) -> transforms.Compose:
     )
 
 
-def build_transform_with_norm(image_size: int, mode: str, mean: torch.Tensor, std: torch.Tensor):
+def build_transform_with_norm(
+    image_size: int, mode: str, mean: torch.Tensor, std: torch.Tensor
+):
     if mode == "center_crop":
         resize = transforms.Compose(
             [
@@ -55,7 +58,8 @@ def build_transform_with_norm(image_size: int, mode: str, mean: torch.Tensor, st
             resize,
             transforms.ToDtype(torch.float32, scale=True),
             transforms.Normalize(
-                mean.tolist(), std.tolist()  # pyright: ignore[reportUnknownArgumentType]
+                mean.tolist(),
+                std.tolist(),  # pyright: ignore[reportUnknownArgumentType]
             ),
         ]
     )

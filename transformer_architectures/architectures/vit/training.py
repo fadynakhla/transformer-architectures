@@ -1,3 +1,4 @@
+import functools
 from typing import Callable
 import math
 
@@ -7,6 +8,7 @@ import pydantic
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchvision.ops as ops
 import tqdm
 
 from transformer_architectures import config
@@ -34,7 +36,7 @@ CONFIG_PATH = "configs/vision_large.yaml"
 class TrainingConfig(pydantic.BaseModel):
     data_path: str
     annotations_path: str
-    batch_size: int = 8
+    batch_size: int
     grad_accumulation_steps: int = 1024
     learning_rate: float
     warmup_steps: int
@@ -50,7 +52,7 @@ class ModelConfig(pydantic.BaseModel):
     embed_dim: int = 1024
     num_heads: int = 16
     ff_dim: int = 4096
-    dropout: float = 0.3
+    dropout: float = 0.1
     num_classes: int | None = None
 
 
@@ -80,7 +82,10 @@ def train() -> None:
         val_split=0,
     )
     data_module.setup()
-    logger.info("Succesfully created DataModule with {} train images", len(data_module.train_dataset))
+    logger.info(
+        "Succesfully created DataModule with {} train images",
+        len(data_module.train_dataset),
+    )
     model_config.num_classes = len(data_module.mid_to_index)
     logger.info("Loading Model")
     model = make_model(model_config)
@@ -88,7 +93,11 @@ def train() -> None:
     run.track(aim_text, name="example", context={"subset": "train"})
     model = model.to(DEVICE)
     logger.info("Model loaded to device: {}", DEVICE)
-    criterion = nn.BCEWithLogitsLoss()
+
+    # logger.info("Calculating pos_weight to correct for class imbalance.")
+    # pos_weight = compute_pos_weight(data_module).to(DEVICE)
+    # criterion = nn.BCEWithLogitsLoss(reduction="none", pos_weight=pos_weight)
+    criterion = functools.partial(ops.sigmoid_focal_loss, alpha=0.9, gamma=2, reduction="mean")
     optimizer = optim.AdamW(
         model.parameters(),
         lr=train_config.learning_rate,
@@ -117,7 +126,8 @@ def train() -> None:
             global_step,
             train_config.log_interval,
         )
-        eval_loss = eval_epoch(model, data_module, criterion, epoch)
+        metrics = eval_epoch(model, data_module, criterion, epoch)
+        eval_loss = metrics["eval_loss"]
         if eval_loss < min_eval_loss:
             logger.info(f"New best eval loss: {eval_loss}. Saving checkpoint.")
             min_eval_loss = eval_loss
@@ -157,6 +167,8 @@ def train_epoch(
             predictions,
             batch.labels,
         )
+        # loss = (per_logit_loss * batch.masks).sum() / batch.masks.sum().clamp_min(1)
+        # loss = per_logit_loss.mean()
         current_group = i // gradient_accumulation_steps + 1
         accumulation_steps = (
             final_group_size
@@ -202,41 +214,56 @@ def eval_epoch(
     data_module: vit.TransformerDataModule,
     criterion: nn.BCEWithLogitsLoss,
     epoch: int,
-) -> float:
+    threshold: float = 0.5,
+) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
 
+    cm = torch.zeros((data_module.num_classes, 2, 2), dtype=torch.long, device=DEVICE)
     dataloader = data_module.test_dataloader()
+
     for _, batch in enumerate(dataloader):
         batch.to(DEVICE)
-        predictions = model(images=batch.images)
+        logits = model(images=batch.images)
         loss: torch.Tensor = criterion(
-            predictions,
+            logits,
             batch.labels,
         )
+        # loss = (per_logit_loss * batch.masks).sum() / batch.masks.sum().clamp_min(1)
         total_loss += loss.item()
 
-        # if i == 0 and epoch % 5 == 0:
-        #     for j, (h, r) in enumerate(zip(hypotheses, references)):
-        #         hyp_text = aim.Text(text=f"{h}")
-        #         ref_text = aim.Text(text=f"{r}")
-        #         run.track(
-        #             hyp_text,
-        #             name=f"eval_sample_{j}",
-        #             epoch=epoch,
-        #             context={"subset": "hypothesis"},
-        #         )
-        #         run.track(
-        #             ref_text,
-        #             name=f"eval_sample_{j}",
-        #             epoch=epoch,
-        #             context={"subset": "references"},
-        #         )
+        preds = torch.sigmoid(logits) >= threshold
+        targets = batch.labels >= 0.5
+
+        tp = (preds & targets).sum(dim=0)
+        fp = (preds & ~targets).sum(dim=0)
+        fn = (~preds & targets).sum(dim=0)
+        tn = (~preds & ~targets).sum(dim=0)
+
+        cm[:, 0, 0] += tn
+        cm[:, 0, 1] += fp
+        cm[:, 1, 0] += fn
+        cm[:, 1, 1] += tp
 
     avg_loss = total_loss / len(dataloader)
-    run.track(avg_loss, name="eval_loss", epoch=epoch, context={"subset": "eval"})
-    return avg_loss
 
+    metrics = {"eval_loss": avg_loss} | calculate_metrics_from_confusion(cm)
+
+    for metric_name, metric in metrics.items():
+        run.track(metric, name=metric_name, epoch=epoch, context={"subset": "eval"})
+    return metrics
+
+@torch.no_grad() # pyright: ignore[reportUntypedFunctionDecorator]
+def compute_pos_weight(data_module: vit.TransformerDataModule) -> torch.Tensor:
+    pos = torch.zeros(data_module.num_classes, dtype=torch.float64)
+    # known = torch.zeros(data_module.num_classes, dtype=torch.float64)
+    dataloader = data_module.train_dataloader()
+    for batch in dataloader:
+        pos   += (batch.labels * batch.masks).sum(0)
+        # known += batch.masks.sum(0)
+    neg = torch.ones(data_module.num_classes, dtype=torch.float64) - pos
+    w = (neg / pos.clamp_min(1)).to(torch.float32)
+    return w.clamp_(max=50)
 
 def make_model(
     config: ModelConfig,
@@ -277,6 +304,64 @@ def log_batch(batch: vit.LabeledBatch, step: int, epoch: int) -> None:
         epoch=epoch,
         context={"subset": "image_and_label"},
     )
+
+
+def calculate_metrics_from_confusion(cm: torch.Tensor) -> dict[str, float]:
+        # ---- derive metrics from confusion ----
+    # per-class counts
+    tn_c = cm[:, 0, 0].to(torch.float64)
+    fp_c = cm[:, 0, 1].to(torch.float64)
+    fn_c = cm[:, 1, 0].to(torch.float64)
+    tp_c = cm[:, 1, 1].to(torch.float64)
+
+    eps = 1e-12
+
+    # per-class metrics
+    prec_c = tp_c / (tp_c + fp_c + eps)
+    rec_c = tp_c / (tp_c + fn_c + eps)
+    # acc_c = (tp_c + tn_c) / (tp_c + tn_c + fp_c + fn_c)
+    f1_c = 2.0 * prec_c * rec_c / (prec_c + rec_c + eps)
+    fpr_c = fp_c / (fp_c + tn_c + eps)
+    fnr_c = fn_c / (fn_c + tp_c + eps)
+
+    # macro (mean over classes)
+    precision_macro = float(torch.nanmean(prec_c).item())
+    recall_macro = float(torch.nanmean(rec_c).item())
+    # accuracy_macro = float(torch.nanmean(acc_c).item())
+    f1_macro = float(torch.nanmean(f1_c).item())
+    fpr_macro = float(torch.nanmean(fpr_c).item())
+    fnr_macro = float(torch.nanmean(fnr_c).item())
+
+    # micro (sum counts over classes then compute)
+    tp = tp_c.sum()
+    fp = fp_c.sum()
+    fn = fn_c.sum()
+    tn = tn_c.sum()
+    precision_micro = float((tp / (tp + fp + eps)).item())
+    recall_micro = float((tp / (tp + fn + eps)).item())
+    accuracy_micro = float(((tp + tn) / (tp + tn + fp + fn)).item())
+    f1_micro = (
+        2.0 * precision_micro * recall_micro / (precision_micro + recall_micro + eps)
+    )
+    fpr_micro = float((fp / (fp + tn + eps)).item())
+    fnr_micro = float((fn / (fn + tp + eps)).item())
+
+
+    metrics = {
+        "accuracy": accuracy_micro,
+        "precision_micro": precision_micro,
+        "recall_micro": recall_micro,
+        "f1_micro": f1_micro,
+        "fpr_micro": fpr_micro,
+        "fnr_micro": fnr_micro,
+        "precision_macro": precision_macro,
+        "recall_macro": recall_macro,
+        # "accuracy_macro": accuracy_macro,
+        "f1_macro": f1_macro,
+        "fpr_macro": fpr_macro,
+        "fnr_macro": fnr_macro
+    }
+    return metrics
 
 
 if __name__ == "__main__":
