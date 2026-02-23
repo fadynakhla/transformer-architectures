@@ -2,10 +2,11 @@ import torch
 from torch import nn
 
 from transformer_architectures import decoder, embedding, encoder, masking
+from transformer_architectures import generation
 from transformer_architectures.positional_encoding import positional_encoding
 
 
-class Transformer(nn.Module):
+class Transformer(generation.GenerationMixin, nn.Module):
     """Implementation of the original Trasnformer"""
 
     def __init__(

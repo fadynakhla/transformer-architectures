@@ -30,7 +30,7 @@ logger = loguru.logger
 mlflow.set_tracking_uri("http://10.9.9.249:5000")
 mlflow.set_experiment("Vanilla Transformer Large - ENFR Test1")
 mlflow.config.enable_system_metrics_logging()  # pyright: ignore[reportPrivateImportUsage]
-mlflow.config.set_system_metrics_sampling_interval( # pyright: ignore[reportPrivateImportUsage]
+mlflow.config.set_system_metrics_sampling_interval(  # pyright: ignore[reportPrivateImportUsage]
     30
 )
 

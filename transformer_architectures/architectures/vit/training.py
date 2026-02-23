@@ -2,8 +2,8 @@ from typing import Any, Callable
 import functools
 import math
 
-import mlflow
 import loguru
+import mlflow
 import pydantic
 import torch
 import torch.nn as nn
@@ -28,8 +28,10 @@ logger = loguru.logger
 
 mlflow.set_tracking_uri("http://10.9.9.249:5000")
 mlflow.set_experiment("Vision Transformer Large - OpenImages")
-mlflow.config.enable_system_metrics_logging() # pyright: ignore[reportPrivateImportUsage]
-mlflow.config.set_system_metrics_sampling_interval(30) # pyright: ignore[reportPrivateImportUsage]
+mlflow.config.enable_system_metrics_logging()  # pyright: ignore[reportPrivateImportUsage]
+mlflow.config.set_system_metrics_sampling_interval(
+    30
+)  # pyright: ignore[reportPrivateImportUsage]
 
 
 CONFIG_PATH = "configs/vision_large.yaml"
@@ -118,7 +120,9 @@ def train() -> None:
     min_eval_loss = 1e9
     with mlflow.start_run():
         mlflow.log_params(params=params)
-        mlflow.log_text(text=f"{data_module.train_dataset[0]}", artifact_file="sample_batch.txt")
+        mlflow.log_text(
+            text=f"{data_module.train_dataset[0]}", artifact_file="sample_batch.txt"
+        )
         for epoch in range(train_config.epochs):
             global_step = train_epoch(
                 model,
@@ -137,7 +141,13 @@ def train() -> None:
                 logger.info(f"New best eval loss: {eval_loss}. Saving checkpoint.")
                 min_eval_loss = eval_loss
                 checkpointing.save_checkpoint(
-                    model, optimizer, scheduler, data_module.generator, NAME, epoch, global_step
+                    model,
+                    optimizer,
+                    scheduler,
+                    data_module.generator,
+                    NAME,
+                    epoch,
+                    global_step,
                 )
 
 
@@ -204,7 +214,9 @@ def train_epoch(
 def log_train_metrics(
     model: nn.Module, loss: float, lr: float, epoch: int, step: int
 ) -> None:
-    mlflow.log_metrics({"train_loss": loss, "learning_rate": lr, "epoch": epoch}, step=step)
+    mlflow.log_metrics(
+        {"train_loss": loss, "learning_rate": lr, "epoch": epoch}, step=step
+    )
     grad_logging.async_log(model, step)
 
 
