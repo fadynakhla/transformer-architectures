@@ -1,5 +1,6 @@
-from typing import Any, Callable
+from typing import Any, Callable, Literal, ContextManager
 import math
+from contextlib import nullcontext
 
 import loguru
 import mlflow
@@ -47,6 +48,7 @@ class TrainingConfig(pydantic.BaseModel):
     label_smoothing: float
     num_samples: int
     log_interval: int = 25
+    precision: Literal["fp32", "bf16"] = "bf16"
 
 
 class ModelConfig(pydantic.BaseModel):
@@ -84,12 +86,13 @@ def train() -> None:
         val_split=0,
     )
     data_module.setup()
-    with mlflow.start_run() as run:
+    with mlflow.start_run():
         mlflow.log_params(params=params)
         mlflow.log_text(
             text=f"{data_module.train_dataset[0]}", artifact_file="sample_batch.txt"
         )
         model = model.to(DEVICE)
+        autocast_ctx = make_autocast_ctx(train_config.precision)
         criterion = nn.CrossEntropyLoss(
             ignore_index=IGNORE_ID, label_smoothing=train_config.label_smoothing
         )
@@ -119,14 +122,15 @@ def train() -> None:
                 epoch,
                 global_step,
                 train_config.log_interval,
+                autocast_ctx
             )
-            bleu, _ = eval_epoch(model, data_module, criterion, epoch)
+            bleu, _ = eval_epoch(model, data_module, criterion, epoch, autocast_ctx)
             if bleu > max_bleu:
                 logger.info(f"New best BLEU score: {bleu}. Saving checkpoint.")
                 max_bleu = bleu
-                # checkpointing.save_checkpoint(
-                #     model, optimizer, scheduler, data_module.generator, NAME, run, epoch
-                # )
+                checkpointing.save_checkpoint(
+                    model, optimizer, scheduler, data_module.generator, NAME, epoch, global_step
+                )
 
 
 def train_epoch(
@@ -139,6 +143,7 @@ def train_epoch(
     epoch: int,
     global_step: int,
     log_interval: int,
+    autocast_ctx: ContextManager
 ) -> int:
     model.train()
 
@@ -155,16 +160,17 @@ def train_epoch(
         if i == 0:
             log_batch(batch, global_step, epoch)
         batch.to(DEVICE)
-        predictions = model(
-            encoder_input=batch.input_ids,
-            encoder_attention_mask=batch.attention_mask,
-            decoder_input=batch.decoder_input_ids,
-            decoder_attention_mask=batch.decoder_attention_mask,
-        )
-        loss: torch.Tensor = criterion(
-            predictions.view(-1, model.vocab_size),
-            batch.target.view(-1),
-        )
+        with autocast_ctx:
+            predictions = model(
+                encoder_input=batch.input_ids,
+                encoder_attention_mask=batch.attention_mask,
+                decoder_input=batch.decoder_input_ids,
+                decoder_attention_mask=batch.decoder_attention_mask,
+            )
+            loss: torch.Tensor = criterion(
+                predictions.view(-1, model.vocab_size),
+                batch.target.view(-1),
+            )
         current_group = i // gradient_accumulation_steps + 1
         accumulation_steps = (
             final_group_size
@@ -207,6 +213,7 @@ def eval_epoch(
     data_module: vanilla.TransformerDataModule,
     criterion: nn.CrossEntropyLoss,
     epoch: int,
+    autocast_ctx: ContextManager
 ) -> tuple[float, float]:
     model.eval()
     total_loss = 0.0
@@ -217,16 +224,17 @@ def eval_epoch(
     dataloader = data_module.test_dataloader()
     for i, batch in enumerate(dataloader):
         batch.to(DEVICE)
-        predictions = model(
-            encoder_input=batch.input_ids,
-            encoder_attention_mask=batch.attention_mask,
-            decoder_input=batch.decoder_input_ids,
-            decoder_attention_mask=batch.decoder_attention_mask,
-        )
-        loss: torch.Tensor = criterion(
-            predictions.view(-1, model.vocab_size),
-            batch.target.view(-1),
-        )
+        with autocast_ctx:
+            predictions = model(
+                encoder_input=batch.input_ids,
+                encoder_attention_mask=batch.attention_mask,
+                decoder_input=batch.decoder_input_ids,
+                decoder_attention_mask=batch.decoder_attention_mask,
+            )
+            loss: torch.Tensor = criterion(
+                predictions.view(-1, model.vocab_size),
+                batch.target.view(-1),
+            )
         total_loss += loss.item()
         predicted_sequences = torch.argmax(predictions, dim=-1)
         predicted_sequences = torch.masked_fill(
@@ -253,7 +261,7 @@ def eval_epoch(
     avg_loss = total_loss / len(dataloader)
     gleu = gleu_score.corpus_gleu(references, hypotheses)
     bleu = bleu_score.corpus_bleu(references, hypotheses)
-    mlflow.log_metrics({"eval_loss": avg_loss, "glue": gleu, "blue": bleu}, step=epoch)
+    mlflow.log_metrics({"eval_loss": avg_loss, "gleu": gleu, "bleu": bleu}, step=epoch)
     return bleu, gleu
 
 
@@ -285,6 +293,26 @@ def load_data(num_samples: int) -> list[vanilla.SourceTarget]:
             "/data/datasets/wmt/en-fr", num_samples=num_samples
         )
     ]
+
+
+def make_autocast_ctx(precision: Literal["fp32", "bf16"]) -> ContextManager:
+    use_cuda = (DEVICE.type == "cuda")
+
+    match precision:
+        case "bf16":
+            if not use_cuda:
+                logger.warning("bf16 requested but running on CPU; using fp32.")
+                autocast_ctx = nullcontext()
+            else:
+                if not torch.cuda.is_bf16_supported():
+                    raise RuntimeError("bf16 requested but not supported on this GPU.")
+                autocast_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        case "fp32":
+            autocast_ctx = nullcontext()
+        case _:
+            raise ValueError(f"precision type: {precision} is not supported.")
+
+    return autocast_ctx
 
 
 def make_schedule(model_size: int, warmup_steps: int) -> Callable[[int], float]:

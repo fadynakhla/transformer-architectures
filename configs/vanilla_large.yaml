@@ -9,7 +9,7 @@ Model:
 
 Training:
   batch_size: 16
-  grad_accumulation_steps: 32
+  grad_accumulation_steps: 4
   learning_rate: 4e-4
   warmup_steps: 3000
   epochs: 10
