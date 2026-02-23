@@ -11,8 +11,9 @@ Training:
   batch_size: 16
   grad_accumulation_steps: 4
   learning_rate: 4e-4
-  warmup_steps: 3000
-  epochs: 10
+  warmup_steps: 4000
+  epochs: 20
   label_smoothing: 0.1
   num_samples: 1000000
-  log_interval: 25
+  log_interval: 50
+  precision: bf16
