@@ -1,14 +1,17 @@
-from typing import Callable
+from typing import Any, Callable
 import math
 
-import aim
 import loguru
+import mlflow
 import pydantic
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import tqdm
-from nltk.translate import bleu_score, gleu_score
+from nltk.translate import (  # pyright: ignore[reportMissingTypeStubs]
+    bleu_score,
+    gleu_score,
+)
 
 from transformer_architectures import config
 from transformer_architectures.architectures import vanilla
@@ -23,10 +26,14 @@ NAME = "vanilla_transformer_large"
 
 logger = loguru.logger
 
-run = aim.Run(
-    repo="aim://0.0.0.0:53800",
-    experiment="Vanilla Transformer Large - ENFR",
+
+mlflow.set_tracking_uri("http://10.9.9.249:5000")
+mlflow.set_experiment("Vanilla Transformer Large - ENFR Test1")
+mlflow.config.enable_system_metrics_logging()  # pyright: ignore[reportPrivateImportUsage]
+mlflow.config.set_system_metrics_sampling_interval( # pyright: ignore[reportPrivateImportUsage]
+    30
 )
+
 
 CONFIG_PATH = "configs/vanilla_large.yaml"
 
@@ -39,7 +46,7 @@ class TrainingConfig(pydantic.BaseModel):
     epochs: int
     label_smoothing: float
     num_samples: int
-    log_interval: int = 50
+    log_interval: int = 25
 
 
 class ModelConfig(pydantic.BaseModel):
@@ -57,7 +64,7 @@ train_config = config.load_config(
     CONFIG_PATH, section="Training", model_class=TrainingConfig
 )
 
-run["hparams"] = {
+params: dict[str, int | float | dict[str, Any]] = {
     "batch_size": train_config.batch_size * train_config.grad_accumulation_steps,
     "grad_accumulation_steps": train_config.grad_accumulation_steps,
     "learning_rate": train_config.learning_rate,
@@ -77,43 +84,49 @@ def train() -> None:
         val_split=0,
     )
     data_module.setup()
-    aim_text = aim.Text(text=f"{data_module.train_dataset[0]}")
-    run.track(aim_text, name="example", context={"subset": "train"})
-    model = model.to(DEVICE)
-    criterion = nn.CrossEntropyLoss(
-        ignore_index=IGNORE_ID, label_smoothing=train_config.label_smoothing
-    )
-    optimizer = optim.Adam(
-        model.parameters(), lr=train_config.learning_rate, betas=(0.9, 0.98), eps=1e-9
-    )
-    epoch_steps = math.ceil(
-        len(data_module.train_dataloader()) / train_config.grad_accumulation_steps
-    )
-    total_steps = train_config.epochs * epoch_steps
-    scheduler = optim.lr_scheduler.LambdaLR(
-        optimizer, make_cosine_schedule(train_config.warmup_steps, total_steps)
-    )
-    global_step = 0
-    max_bleu = 0.0
-    for epoch in range(train_config.epochs):
-        global_step = train_epoch(
-            model,
-            data_module,
-            criterion,
-            optimizer,
-            scheduler,
-            train_config.grad_accumulation_steps,
-            epoch,
-            global_step,
-            train_config.log_interval,
+    with mlflow.start_run() as run:
+        mlflow.log_params(params=params)
+        mlflow.log_text(
+            text=f"{data_module.train_dataset[0]}", artifact_file="sample_batch.txt"
         )
-        bleu, _ = eval_epoch(model, data_module, criterion, epoch)
-        if bleu > max_bleu:
-            logger.info(f"New best BLEU score: {bleu}. Saving checkpoint.")
-            max_bleu = bleu
-            checkpointing.save_checkpoint(
-                model, optimizer, scheduler, data_module.generator, NAME, run, epoch
+        model = model.to(DEVICE)
+        criterion = nn.CrossEntropyLoss(
+            ignore_index=IGNORE_ID, label_smoothing=train_config.label_smoothing
+        )
+        optimizer = optim.Adam(
+            model.parameters(),
+            lr=train_config.learning_rate,
+            betas=(0.9, 0.98),
+            eps=1e-9,
+        )
+        epoch_steps = math.ceil(
+            len(data_module.train_dataloader()) / train_config.grad_accumulation_steps
+        )
+        total_steps = train_config.epochs * epoch_steps
+        scheduler = optim.lr_scheduler.LambdaLR(
+            optimizer, make_cosine_schedule(train_config.warmup_steps, total_steps)
+        )
+        global_step = 0
+        max_bleu = 0.0
+        for epoch in range(train_config.epochs):
+            global_step = train_epoch(
+                model,
+                data_module,
+                criterion,
+                optimizer,
+                scheduler,
+                train_config.grad_accumulation_steps,
+                epoch,
+                global_step,
+                train_config.log_interval,
             )
+            bleu, _ = eval_epoch(model, data_module, criterion, epoch)
+            if bleu > max_bleu:
+                logger.info(f"New best BLEU score: {bleu}. Saving checkpoint.")
+                max_bleu = bleu
+                # checkpointing.save_checkpoint(
+                #     model, optimizer, scheduler, data_module.generator, NAME, run, epoch
+                # )
 
 
 def train_epoch(
@@ -182,13 +195,10 @@ def train_epoch(
 def log_train_metrics(
     model: nn.Module, loss: float, lr: float, epoch: int, step: int
 ) -> None:
-    run.track(
-        loss, name="train_loss", step=step, epoch=epoch, context={"subset": "train"}
+    mlflow.log_metrics(
+        {"train_loss": loss, "learning_rate": lr, "epoch": epoch}, step=step
     )
-    run.track(
-        lr, name="learning_rate", step=step, epoch=epoch, context={"subset": "train"}
-    )
-    grad_logging.async_log(run, model, step, epoch)
+    grad_logging.async_log(model, step)
 
 
 @torch.no_grad()
@@ -231,27 +241,19 @@ def eval_epoch(
         )
         if i == 0 and epoch % 5 == 0:
             for j, (h, r) in enumerate(zip(hypotheses, references)):
-                hyp_text = aim.Text(text=f"{h}")
-                ref_text = aim.Text(text=f"{r}")
-                run.track(
-                    hyp_text,
-                    name=f"eval_sample_{j}",
-                    epoch=epoch,
-                    context={"subset": "hypothesis"},
+                mlflow.log_text(
+                    text=f"{h}",
+                    artifact_file=f"epoch_{epoch}/eval_sample{j}/hypothesis.txt",
                 )
-                run.track(
-                    ref_text,
-                    name=f"eval_sample_{j}",
-                    epoch=epoch,
-                    context={"subset": "references"},
+                mlflow.log_text(
+                    text=f"{r}",
+                    artifact_file=f"epoch_{epoch}/eval_sample{j}/references.txt",
                 )
 
     avg_loss = total_loss / len(dataloader)
-    run.track(avg_loss, name="eval_loss", epoch=epoch, context={"subset": "eval"})
     gleu = gleu_score.corpus_gleu(references, hypotheses)
-    run.track(gleu, name="gleu", epoch=epoch, context={"subset": "eval"})
     bleu = bleu_score.corpus_bleu(references, hypotheses)
-    run.track(bleu, name="bleu", epoch=epoch, context={"subset": "eval"})
+    mlflow.log_metrics({"eval_loss": avg_loss, "glue": gleu, "blue": bleu}, step=epoch)
     return bleu, gleu
 
 
@@ -306,29 +308,13 @@ def make_cosine_schedule(warmup_steps: int, total_steps: int) -> Callable[[int],
 
 
 def log_batch(batch: vanilla.LabeledBatch, step: int, epoch: int) -> None:
-    input_text = aim.Text(text=f"{batch.input_ids}")
-    decoder_text = aim.Text(text=f"{batch.decoder_input_ids}")
-    target_text = aim.Text(text=f"{batch.target}")
-    run.track(
-        input_text,
-        name="sample_batch",
-        step=step,
-        epoch=epoch,
-        context={"subset": "input_ids"},
-    )
-    run.track(
-        decoder_text,
-        name="sample_batch",
-        step=step,
-        epoch=epoch,
-        context={"subset": "decoder_input_ids"},
-    )
-    run.track(
-        target_text,
-        name="sample_batch",
-        step=step,
-        epoch=epoch,
-        context={"subset": "target"},
+    mlflow.log_dict(
+        {
+            "input_ids": batch.input_ids.tolist(),
+            "decoder_input_ids": batch.decoder_input_ids.tolist(),
+            "target": batch.target.tolist(),
+        },
+        f"batches/epoch_{epoch}_step_{step}.json",
     )
 
 

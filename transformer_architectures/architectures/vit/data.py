@@ -12,7 +12,7 @@ import torch
 from PIL import Image
 from torch.utils import data as torchd
 from torchvision.io import read_image  # pyright: ignore[reportMissingTypeStubs]
-from torchvision.transforms import (  # pyright: ignore[reportMissingTypeStubs]
+from torchvision.transforms import ( # pyright: ignore[reportMissingTypeStubs]
     v2 as transforms,
 )
 
@@ -210,7 +210,9 @@ class OpenImagesDataset(torchd.Dataset[MultiLabeledImage]):
             pos_idx = [self.mid_to_index[m] for m in mids]
             neg_idx = [self.mid_to_index[m] for m in img_to_neg_mids[img_id]]
             index.append(
-                MultiLabeledImageIndex(self.image_id_to_path[img_id], pos_idx, neg_idx, img_id)
+                MultiLabeledImageIndex(
+                    self.image_id_to_path[img_id], pos_idx, neg_idx, img_id
+                )
             )
         return index
 

@@ -1,8 +1,8 @@
+from typing import Any, Callable
 import functools
-from typing import Callable
 import math
 
-import aim
+import mlflow
 import loguru
 import pydantic
 import torch
@@ -25,10 +25,12 @@ NAME = "vision_transformer_large"
 
 logger = loguru.logger
 
-run = aim.Run(
-    repo="aim://0.0.0.0:53800",
-    experiment="Vision Transformer Large - OpenImages",
-)
+
+mlflow.set_tracking_uri("http://10.9.9.249:5000")
+mlflow.set_experiment("Vision Transformer Large - OpenImages")
+mlflow.config.enable_system_metrics_logging() # pyright: ignore[reportPrivateImportUsage]
+mlflow.config.set_system_metrics_sampling_interval(30) # pyright: ignore[reportPrivateImportUsage]
+
 
 CONFIG_PATH = "configs/vision_large.yaml"
 
@@ -61,13 +63,6 @@ train_config = config.load_config(
     CONFIG_PATH, section="Training", model_class=TrainingConfig
 )
 
-run["hparams"] = {
-    "batch_size": train_config.batch_size * train_config.grad_accumulation_steps,
-    "grad_accumulation_steps": train_config.grad_accumulation_steps,
-    "learning_rate": train_config.learning_rate,
-    "model_config": model_config.model_dump(),
-}
-
 
 def train() -> None:
     logger.info("Creating DataModule")
@@ -89,15 +84,22 @@ def train() -> None:
     model_config.num_classes = len(data_module.mid_to_index)
     logger.info("Loading Model")
     model = make_model(model_config)
-    aim_text = aim.Text(text=f"{data_module.train_dataset[0]}")
-    run.track(aim_text, name="example", context={"subset": "train"})
     model = model.to(DEVICE)
     logger.info("Model loaded to device: {}", DEVICE)
+
+    params: dict[str, int | float | dict[str, Any]] = {
+        "batch_size": train_config.batch_size * train_config.grad_accumulation_steps,
+        "grad_accumulation_steps": train_config.grad_accumulation_steps,
+        "learning_rate": train_config.learning_rate,
+        "model_config": model_config.model_dump(),
+    }
 
     # logger.info("Calculating pos_weight to correct for class imbalance.")
     # pos_weight = compute_pos_weight(data_module).to(DEVICE)
     # criterion = nn.BCEWithLogitsLoss(reduction="none", pos_weight=pos_weight)
-    criterion = functools.partial(ops.sigmoid_focal_loss, alpha=0.9, gamma=2, reduction="mean")
+    criterion = functools.partial(
+        ops.sigmoid_focal_loss, alpha=0.9, gamma=2, reduction="mean"
+    )
     optimizer = optim.AdamW(
         model.parameters(),
         lr=train_config.learning_rate,
@@ -114,26 +116,29 @@ def train() -> None:
     )
     global_step = 0
     min_eval_loss = 1e9
-    for epoch in range(train_config.epochs):
-        global_step = train_epoch(
-            model,
-            data_module,
-            criterion,
-            optimizer,
-            scheduler,
-            train_config.grad_accumulation_steps,
-            epoch,
-            global_step,
-            train_config.log_interval,
-        )
-        metrics = eval_epoch(model, data_module, criterion, epoch)
-        eval_loss = metrics["eval_loss"]
-        if eval_loss < min_eval_loss:
-            logger.info(f"New best eval loss: {eval_loss}. Saving checkpoint.")
-            min_eval_loss = eval_loss
-            checkpointing.save_checkpoint(
-                model, optimizer, scheduler, data_module.generator, NAME, run, epoch
+    with mlflow.start_run():
+        mlflow.log_params(params=params)
+        mlflow.log_text(text=f"{data_module.train_dataset[0]}", artifact_file="sample_batch.txt")
+        for epoch in range(train_config.epochs):
+            global_step = train_epoch(
+                model,
+                data_module,
+                criterion,
+                optimizer,
+                scheduler,
+                train_config.grad_accumulation_steps,
+                epoch,
+                global_step,
+                train_config.log_interval,
             )
+            metrics = eval_epoch(model, data_module, criterion, global_step)
+            eval_loss = metrics["eval_loss"]
+            if eval_loss < min_eval_loss:
+                logger.info(f"New best eval loss: {eval_loss}. Saving checkpoint.")
+                min_eval_loss = eval_loss
+                checkpointing.save_checkpoint(
+                    model, optimizer, scheduler, data_module.generator, NAME, epoch, global_step
+                )
 
 
 def train_epoch(
@@ -160,7 +165,7 @@ def train_epoch(
     progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
     for i, batch in enumerate(dataloader):
         if i == 0:
-            log_batch(batch, global_step, epoch)
+            log_batch(batch, global_step)
         batch.to(DEVICE)
         predictions = model(images=batch.images)
         loss: torch.Tensor = criterion(
@@ -199,13 +204,8 @@ def train_epoch(
 def log_train_metrics(
     model: nn.Module, loss: float, lr: float, epoch: int, step: int
 ) -> None:
-    run.track(
-        loss, name="train_loss", step=step, epoch=epoch, context={"subset": "train"}
-    )
-    run.track(
-        lr, name="learning_rate", step=step, epoch=epoch, context={"subset": "train"}
-    )
-    grad_logging.async_log(run, model, step, epoch)
+    mlflow.log_metrics({"train_loss": loss, "learning_rate": lr, "epoch": epoch}, step=step)
+    grad_logging.async_log(model, step)
 
 
 @torch.no_grad()  # pyright: ignore[reportUntypedFunctionDecorator]
@@ -213,7 +213,7 @@ def eval_epoch(
     model: vit.VisionTransformer,
     data_module: vit.TransformerDataModule,
     criterion: nn.BCEWithLogitsLoss,
-    epoch: int,
+    global_step: int,
     threshold: float = 0.5,
 ) -> dict[str, float]:
     model.eval()
@@ -249,21 +249,22 @@ def eval_epoch(
 
     metrics = {"eval_loss": avg_loss} | calculate_metrics_from_confusion(cm)
 
-    for metric_name, metric in metrics.items():
-        run.track(metric, name=metric_name, epoch=epoch, context={"subset": "eval"})
+    mlflow.log_metrics(metrics, step=global_step)
     return metrics
 
-@torch.no_grad() # pyright: ignore[reportUntypedFunctionDecorator]
+
+@torch.no_grad()  # pyright: ignore[reportUntypedFunctionDecorator]
 def compute_pos_weight(data_module: vit.TransformerDataModule) -> torch.Tensor:
     pos = torch.zeros(data_module.num_classes, dtype=torch.float64)
     # known = torch.zeros(data_module.num_classes, dtype=torch.float64)
     dataloader = data_module.train_dataloader()
     for batch in dataloader:
-        pos   += (batch.labels * batch.masks).sum(0)
+        pos += (batch.labels * batch.masks).sum(0)
         # known += batch.masks.sum(0)
     neg = torch.ones(data_module.num_classes, dtype=torch.float64) - pos
     w = (neg / pos.clamp_min(1)).to(torch.float32)
     return w.clamp_(max=50)
+
 
 def make_model(
     config: ModelConfig,
@@ -295,19 +296,13 @@ def make_cosine_schedule(warmup_steps: int, total_steps: int) -> Callable[[int],
     return schedule
 
 
-def log_batch(batch: vit.LabeledBatch, step: int, epoch: int) -> None:
-    image = aim.Image(image=batch.images[0], caption=f"{batch.labels[0]}")
-    run.track(
-        image,
-        name="sample_input",
-        step=step,
-        epoch=epoch,
-        context={"subset": "image_and_label"},
-    )
+def log_batch(batch: vit.LabeledBatch, step: int) -> None:
+    image = batch.images[0].permute(1, 2, 0).cpu().numpy()
+    mlflow.log_image(image, artifact_file=f"sample_inputs/step_{step}.png")
 
 
 def calculate_metrics_from_confusion(cm: torch.Tensor) -> dict[str, float]:
-        # ---- derive metrics from confusion ----
+    # ---- derive metrics from confusion ----
     # per-class counts
     tn_c = cm[:, 0, 0].to(torch.float64)
     fp_c = cm[:, 0, 1].to(torch.float64)
@@ -346,7 +341,6 @@ def calculate_metrics_from_confusion(cm: torch.Tensor) -> dict[str, float]:
     fpr_micro = float((fp / (fp + tn + eps)).item())
     fnr_micro = float((fn / (fn + tp + eps)).item())
 
-
     metrics = {
         "accuracy": accuracy_micro,
         "precision_micro": precision_micro,
@@ -359,7 +353,7 @@ def calculate_metrics_from_confusion(cm: torch.Tensor) -> dict[str, float]:
         # "accuracy_macro": accuracy_macro,
         "f1_macro": f1_macro,
         "fpr_macro": fpr_macro,
-        "fnr_macro": fnr_macro
+        "fnr_macro": fnr_macro,
     }
     return metrics
 

@@ -8,11 +8,11 @@ Model:
   dropout: 0.3
 
 Training:
-  batch_size: 12
-  grad_accumulation_steps: 16
+  batch_size: 16
+  grad_accumulation_steps: 32
   learning_rate: 4e-4
   warmup_steps: 3000
   epochs: 10
   label_smoothing: 0.1
-  num_samples: 500000
-  log_interval: 50
+  num_samples: 1000000
+  log_interval: 25
