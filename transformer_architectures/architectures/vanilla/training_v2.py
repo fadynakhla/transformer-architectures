@@ -48,7 +48,6 @@ class TrainingConfig(pydantic.BaseModel):
     label_smoothing: float
     num_samples: int
     log_interval: int = 25
-    log_grads: bool = False
     precision: Literal["fp32", "bf16"] = "bf16"
     # Token-budget bucketing. When set, batch_size is ignored for the train dataloader
     # and batches are sized to contain ~token_budget real tokens instead.
@@ -145,7 +144,6 @@ def train() -> None:
                 epoch,
                 global_step,
                 train_config.log_interval,
-                train_config.log_grads,
                 autocast_ctx,
             )
             bleu, _ = evaluate(model, data_module, criterion, autocast_ctx, stage="val", epoch=epoch, global_step=global_step)
@@ -168,17 +166,31 @@ def train_epoch(
     epoch: int,
     global_step: int,
     log_interval: int,
-    log_grads: bool,
     autocast_ctx: ContextManager,
 ) -> int:
     model.train()
 
     dataloader = data_module.train_dataloader()
-    total_batches = len(dataloader)
-    total_groups = math.ceil(total_batches / gradient_accumulation_steps)
     accumulated_loss = 0.0
+    accumulated_batches = 0
 
-    progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
+    optimizer_steps = math.ceil(len(dataloader) / gradient_accumulation_steps)
+    progress_bar = tqdm.tqdm(total=optimizer_steps, desc=f"Epoch {epoch}")
+
+    def _step() -> None:
+        nonlocal accumulated_loss, accumulated_batches, global_step
+        optimizer.step()
+        scheduler.step()
+        if global_step % log_interval == 0:
+            lr = float(scheduler.get_last_lr()[0])
+            log_train_metrics(model, accumulated_loss, lr, epoch, global_step)
+        progress_bar.update(1)
+        progress_bar.set_postfix({"loss": accumulated_loss})
+        accumulated_loss = 0.0
+        accumulated_batches = 0
+        global_step += 1
+        optimizer.zero_grad()
+
     for i, batch in enumerate(dataloader):
         if i == 0:
             log_batch(batch, global_step, epoch)
@@ -197,32 +209,25 @@ def train_epoch(
         loss /= gradient_accumulation_steps
         loss.backward()
         accumulated_loss += loss.detach().item()
+        accumulated_batches += 1
 
-        if (i + 1) % gradient_accumulation_steps == 0 or i == total_batches - 1:
-            optimizer.step()
-            scheduler.step()
-            if global_step % log_interval == 0:
-                lr = float(scheduler.get_last_lr()[0])
-                log_train_metrics(model, accumulated_loss, lr, epoch, global_step, log_grads)
+        if accumulated_batches == gradient_accumulation_steps:
+            _step()
 
-            progress_bar.update(1)
-            progress_bar.set_postfix({"loss": accumulated_loss})
-            accumulated_loss = 0.0
-            global_step += 1
-            optimizer.zero_grad()
+    if accumulated_batches > 0:
+        _step()
 
     progress_bar.close()
     return global_step
 
 
 def log_train_metrics(
-    model: nn.Module, loss: float, lr: float, epoch: int, step: int, log_grads: bool
+    model: nn.Module, loss: float, lr: float, epoch: int, step: int
 ) -> None:
     mlflow.log_metrics(
         {"train_loss": loss, "learning_rate": lr, "epoch": epoch}, step=step
     )
-    if log_grads:
-        grad_logging.async_log(model, step)
+    grad_logging.async_log(model, step)
 
 
 @torch.no_grad()
@@ -280,7 +285,7 @@ def evaluate(
 
     avg_loss = total_loss / len(dataloader)
     gleu = float(gleu_score.corpus_gleu(references, hypotheses))
-    bleu = float(bleu_score.corpus_bleu(references, hypotheses)) # type: ignore
+    bleu = float(bleu_score.corpus_bleu(references, hypotheses))  # type: ignore
     mlflow.log_metrics({f"{stage}_loss": avg_loss, f"{stage}_gleu": gleu, f"{stage}_bleu": bleu}, step=global_step)
     return bleu, gleu
 
@@ -348,6 +353,8 @@ def make_cosine_schedule(warmup_steps: int, total_steps: int) -> Callable[[int],
     def schedule(step: int) -> float:
         if step < warmup_steps:
             return step / warmup_steps
+        if step >= total_steps:
+            return 0.0
         return 0.5 * (
             1 + math.cos(math.pi * (step - warmup_steps) / (total_steps - warmup_steps))
         )
