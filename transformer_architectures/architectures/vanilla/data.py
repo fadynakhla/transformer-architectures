@@ -1,4 +1,4 @@
-from typing import Optional, Protocol, TypeVar, runtime_checkable
+from typing import Literal, Optional, Protocol, TypeVar, runtime_checkable
 import dataclasses
 import math
 import multiprocessing
@@ -8,6 +8,7 @@ import torch
 from torch.utils import data as torchd
 
 from transformer_architectures.architectures.vanilla import tokenization
+from transformer_architectures import samplers
 
 IGNORE_ID = -100
 
@@ -121,6 +122,8 @@ class TransformerDataModule:
         test_split: float = 0.2,
         val_split: float = 0.1,
         seed: int = 42,
+        token_budget: Optional[int] = None,
+        sort_window: Optional[int] = None,
     ) -> None:
         self.data = data
         self.tokenizer = tokenizer
@@ -128,7 +131,10 @@ class TransformerDataModule:
         self.per_device_eval_batch_size = per_device_eval_batch_size
         self.val_split = val_split
         self.test_split = test_split
+        self.token_budget = token_budget
+        self.sort_window = sort_window
         self.generator = torch.Generator().manual_seed(seed)
+        self.train_batch_sampler: Optional[torchd.Sampler[list[int]]] = None
         self.data_collator = TransformerDataCollator(
             tokenizer=tokenizer, padding="longest", pad_to_multiple_of=8
         )
@@ -138,8 +144,23 @@ class TransformerDataModule:
         self.train_dataset, self.val_dataset, self.test_dataset = train_val_test_split(
             full_dataset, self.val_split, self.test_split, self.generator
         )
+        if self.token_budget is not None:
+            self.train_batch_sampler = samplers.TokenBudgetBatchSampler(
+                dataset=self.train_dataset,
+                token_budget=self.token_budget,
+                sort_window=self.sort_window,
+                generator=self.generator,
+            )
 
     def train_dataloader(self) -> torchd.DataLoader[dict[str, list[int]]]:
+        if self.train_batch_sampler is not None:
+            return torchd.DataLoader(
+                dataset=self.train_dataset,
+                batch_sampler=self.train_batch_sampler,
+                collate_fn=self.data_collator,
+                num_workers=multiprocessing.cpu_count(),
+                pin_memory=True,
+            )
         return torchd.DataLoader(
             dataset=self.train_dataset,
             batch_size=self.per_device_train_batch_size,
@@ -165,6 +186,15 @@ class TransformerDataModule:
             collate_fn=self.data_collator,
             shuffle=False,
         )
+
+    def dataloader(self, stage: Literal["train", "val", "test"]) -> torchd.DataLoader[dict[str, list[int]]]:
+        match stage:
+            case "train":
+                return self.train_dataloader()
+            case "val":
+                return self.val_dataloader()
+            case "test":
+                return self.test_dataloader()
 
 
 @runtime_checkable

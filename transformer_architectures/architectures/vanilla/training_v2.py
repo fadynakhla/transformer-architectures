@@ -156,11 +156,26 @@ def train_epoch(
     model.train()
 
     dataloader = data_module.train_dataloader()
-    total_batches = len(dataloader)
-    total_groups = math.ceil(total_batches / gradient_accumulation_steps)
     accumulated_loss = 0.0
+    accumulated_batches = 0
 
-    progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
+    optimizer_steps = math.ceil(len(dataloader) / gradient_accumulation_steps)
+    progress_bar = tqdm.tqdm(total=optimizer_steps, desc=f"Epoch {epoch}")
+
+    def _step() -> None:
+        nonlocal accumulated_loss, accumulated_batches, global_step
+        optimizer.step()
+        scheduler.step()
+        if global_step % log_interval == 0:
+            lr = scheduler.get_last_lr()[0]
+            log_train_metrics(model, accumulated_loss, lr, epoch, global_step)
+        progress_bar.update(1)
+        progress_bar.set_postfix({"loss": accumulated_loss})
+        accumulated_loss = 0.0
+        accumulated_batches = 0
+        global_step += 1
+        optimizer.zero_grad()
+
     for i, batch in enumerate(dataloader):
         if i == 0:
             log_batch(batch, global_step, epoch)
@@ -179,19 +194,13 @@ def train_epoch(
         loss /= gradient_accumulation_steps
         loss.backward()
         accumulated_loss += loss.detach().item()
+        accumulated_batches += 1
 
-        if (i + 1) % gradient_accumulation_steps == 0 or i == total_batches - 1:
-            optimizer.step()
-            scheduler.step()
-            if global_step % log_interval == 0:
-                lr = float(scheduler.get_last_lr()[0])
-                log_train_metrics(model, accumulated_loss, lr, epoch, global_step)
+        if accumulated_batches == gradient_accumulation_steps:
+            _step()
 
-            progress_bar.update(1)
-            progress_bar.set_postfix({"loss": accumulated_loss})
-            accumulated_loss = 0.0
-            global_step += 1
-            optimizer.zero_grad()
+    if accumulated_batches > 0:
+        _step()
 
     progress_bar.close()
     return global_step
@@ -261,7 +270,7 @@ def evaluate(
 
     avg_loss = total_loss / len(dataloader)
     gleu = float(gleu_score.corpus_gleu(references, hypotheses))
-    bleu = float(bleu_score.corpus_bleu(references, hypotheses)) # type: ignore
+    bleu = float(bleu_score.corpus_bleu(references, hypotheses))
     mlflow.log_metrics({f"{stage}_loss": avg_loss, f"{stage}_gleu": gleu, f"{stage}_bleu": bleu}, step=global_step)
     return bleu, gleu
 
