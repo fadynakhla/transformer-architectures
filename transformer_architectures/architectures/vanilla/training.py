@@ -48,6 +48,7 @@ class TrainingConfig(pydantic.BaseModel):
     label_smoothing: float
     num_samples: int
     log_interval: int = 25
+    log_grads: bool = False
     precision: Literal["fp32", "bf16"] = "bf16"
     # Token-budget bucketing. When set, batch_size is ignored for the train dataloader
     # and batches are sized to contain ~token_budget real tokens instead.
@@ -71,12 +72,27 @@ train_config = config.load_config(
     CONFIG_PATH, section="Training", model_class=TrainingConfig
 )
 
+def _batch_config() -> dict[str, Any]:
+    if train_config.token_budget is not None:
+        return {
+            "batch_sampling": "token_budget",
+            "per_device_token_budget": train_config.token_budget,
+            "token_budget": train_config.token_budget * train_config.grad_accumulation_steps,
+            "sort_window": train_config.sort_window,
+        }
+    return {
+        "batch_sampling": "fixed",
+        "per_device_train_batch_size": train_config.batch_size,
+        "batch_size": train_config.batch_size * train_config.grad_accumulation_steps,
+    }
+
+
 params: dict[str, int | float | dict[str, Any]] = {
-    "batch_size": train_config.batch_size * train_config.grad_accumulation_steps,
     "grad_accumulation_steps": train_config.grad_accumulation_steps,
     "learning_rate": train_config.learning_rate,
     "label_smoothing": train_config.label_smoothing,
     "model_config": model_config.model_dump(),
+    "batch_config": _batch_config(),
 }
 
 
@@ -129,6 +145,7 @@ def train() -> None:
                 epoch,
                 global_step,
                 train_config.log_interval,
+                train_config.log_grads,
                 autocast_ctx,
             )
             bleu, _ = evaluate(model, data_module, criterion, autocast_ctx, stage="val", epoch=epoch, global_step=global_step)
@@ -151,6 +168,7 @@ def train_epoch(
     epoch: int,
     global_step: int,
     log_interval: int,
+    log_grads: bool,
     autocast_ctx: ContextManager,
 ) -> int:
     model.train()
@@ -185,7 +203,7 @@ def train_epoch(
             scheduler.step()
             if global_step % log_interval == 0:
                 lr = float(scheduler.get_last_lr()[0])
-                log_train_metrics(model, accumulated_loss, lr, epoch, global_step)
+                log_train_metrics(model, accumulated_loss, lr, epoch, global_step, log_grads)
 
             progress_bar.update(1)
             progress_bar.set_postfix({"loss": accumulated_loss})
@@ -198,12 +216,13 @@ def train_epoch(
 
 
 def log_train_metrics(
-    model: nn.Module, loss: float, lr: float, epoch: int, step: int
+    model: nn.Module, loss: float, lr: float, epoch: int, step: int, log_grads: bool
 ) -> None:
     mlflow.log_metrics(
         {"train_loss": loss, "learning_rate": lr, "epoch": epoch}, step=step
     )
-    grad_logging.async_log(model, step)
+    if log_grads:
+        grad_logging.async_log(model, step)
 
 
 @torch.no_grad()

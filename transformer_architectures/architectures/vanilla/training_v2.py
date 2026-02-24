@@ -71,12 +71,27 @@ train_config = config.load_config(
     CONFIG_PATH, section="Training", model_class=TrainingConfig
 )
 
+def _batch_config() -> dict[str, Any]:
+    if train_config.token_budget is not None:
+        return {
+            "batch_sampling": "token_budget",
+            "per_device_token_budget": train_config.token_budget,
+            "token_budget": train_config.token_budget * train_config.grad_accumulation_steps,
+            "sort_window": train_config.sort_window,
+        }
+    return {
+        "batch_sampling": "fixed",
+        "per_device_train_batch_size": train_config.batch_size,
+        "batch_size": train_config.batch_size * train_config.grad_accumulation_steps,
+    }
+
+
 params: dict[str, int | float | dict[str, Any]] = {
-    "batch_size": train_config.batch_size * train_config.grad_accumulation_steps,
     "grad_accumulation_steps": train_config.grad_accumulation_steps,
     "learning_rate": train_config.learning_rate,
     "label_smoothing": train_config.label_smoothing,
     "model_config": model_config.model_dump(),
+    "batch_config": _batch_config(),
 }
 
 
@@ -167,7 +182,7 @@ def train_epoch(
         optimizer.step()
         scheduler.step()
         if global_step % log_interval == 0:
-            lr = scheduler.get_last_lr()[0]
+            lr = float(scheduler.get_last_lr()[0])
             log_train_metrics(model, accumulated_loss, lr, epoch, global_step)
         progress_bar.update(1)
         progress_bar.set_postfix({"loss": accumulated_loss})
@@ -270,7 +285,7 @@ def evaluate(
 
     avg_loss = total_loss / len(dataloader)
     gleu = float(gleu_score.corpus_gleu(references, hypotheses))
-    bleu = float(bleu_score.corpus_bleu(references, hypotheses))
+    bleu = float(bleu_score.corpus_bleu(references, hypotheses))  # type: ignore
     mlflow.log_metrics({f"{stage}_loss": avg_loss, f"{stage}_gleu": gleu, f"{stage}_bleu": bleu}, step=global_step)
     return bleu, gleu
 
@@ -338,6 +353,8 @@ def make_cosine_schedule(warmup_steps: int, total_steps: int) -> Callable[[int],
     def schedule(step: int) -> float:
         if step < warmup_steps:
             return step / warmup_steps
+        if step >= total_steps:
+            return 0.0
         return 0.5 * (
             1 + math.cos(math.pi * (step - warmup_steps) / (total_steps - warmup_steps))
         )
