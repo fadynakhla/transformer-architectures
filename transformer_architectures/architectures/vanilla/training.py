@@ -1,4 +1,4 @@
-from typing import Any, Callable, Literal, ContextManager, Optional
+from typing import Any, Callable, ContextManager, Literal, Optional
 import math
 from contextlib import nullcontext
 
@@ -31,7 +31,7 @@ logger = loguru.logger
 mlflow.set_tracking_uri("http://10.9.9.249:5000")
 mlflow.set_experiment("Vanilla Transformer Large - ENFR Test1")
 mlflow.config.enable_system_metrics_logging()  # pyright: ignore[reportPrivateImportUsage]
-mlflow.config.set_system_metrics_sampling_interval( # pyright: ignore[reportPrivateImportUsage]
+mlflow.config.set_system_metrics_sampling_interval(  # pyright: ignore[reportPrivateImportUsage]
     30
 )
 
@@ -48,7 +48,7 @@ class TrainingConfig(pydantic.BaseModel):
     label_smoothing: float
     num_samples: int
     log_interval: int = 25
-    log_grads: bool = False
+    log_grad_distributions: bool = False
     precision: Literal["fp32", "bf16"] = "bf16"
     # Token-budget bucketing. When set, batch_size is ignored for the train dataloader
     # and batches are sized to contain ~token_budget real tokens instead.
@@ -72,12 +72,14 @@ train_config = config.load_config(
     CONFIG_PATH, section="Training", model_class=TrainingConfig
 )
 
+
 def _batch_config() -> dict[str, Any]:
     if train_config.token_budget is not None:
         return {
             "batch_sampling": "token_budget",
             "per_device_token_budget": train_config.token_budget,
-            "token_budget": train_config.token_budget * train_config.grad_accumulation_steps,
+            "token_budget": train_config.token_budget
+            * train_config.grad_accumulation_steps,
             "sort_window": train_config.sort_window,
         }
     return {
@@ -145,17 +147,39 @@ def train() -> None:
                 epoch,
                 global_step,
                 train_config.log_interval,
-                train_config.log_grads,
+                train_config.log_grad_distributions,
                 autocast_ctx,
             )
-            bleu, _ = evaluate(model, data_module, criterion, autocast_ctx, stage="val", epoch=epoch, global_step=global_step)
+            bleu, _ = evaluate(
+                model,
+                data_module,
+                criterion,
+                autocast_ctx,
+                stage="val",
+                epoch=epoch,
+                global_step=global_step,
+            )
             if bleu > max_bleu:
                 logger.info(f"New best BLEU score: {bleu}. Saving checkpoint.")
                 max_bleu = bleu
                 checkpointing.save_checkpoint(
-                    model, optimizer, scheduler, data_module.generator, NAME, epoch, global_step
+                    model,
+                    optimizer,
+                    scheduler,
+                    data_module.generator,
+                    NAME,
+                    epoch,
+                    global_step,
                 )
-        evaluate(model, data_module, criterion, autocast_ctx, stage="test", epoch=train_config.epochs, global_step=global_step)
+        evaluate(
+            model,
+            data_module,
+            criterion,
+            autocast_ctx,
+            stage="test",
+            epoch=train_config.epochs,
+            global_step=global_step,
+        )
 
 
 def train_epoch(
@@ -168,7 +192,7 @@ def train_epoch(
     epoch: int,
     global_step: int,
     log_interval: int,
-    log_grads: bool,
+    log_grad_distributions: bool,
     autocast_ctx: ContextManager,
 ) -> int:
     model.train()
@@ -203,7 +227,14 @@ def train_epoch(
             scheduler.step()
             if global_step % log_interval == 0:
                 lr = float(scheduler.get_last_lr()[0])
-                log_train_metrics(model, accumulated_loss, lr, epoch, global_step, log_grads)
+                log_train_metrics(
+                    model=model,
+                    loss=accumulated_loss,
+                    lr=lr,
+                    epoch=epoch,
+                    step=global_step,
+                    log_distributions=log_grad_distributions,
+                )
 
             progress_bar.update(1)
             progress_bar.set_postfix({"loss": accumulated_loss})
@@ -216,13 +247,18 @@ def train_epoch(
 
 
 def log_train_metrics(
-    model: nn.Module, loss: float, lr: float, epoch: int, step: int, log_grads: bool
+    model: nn.Module,
+    loss: float,
+    lr: float,
+    epoch: int,
+    step: int,
+    log_distributions: bool,
 ) -> None:
     mlflow.log_metrics(
         {"train_loss": loss, "learning_rate": lr, "epoch": epoch}, step=step
     )
-    if log_grads:
-        grad_logging.async_log(model, step)
+
+    grad_logging.log_grads(model, step, log_distributions)
 
 
 @torch.no_grad()
@@ -241,7 +277,11 @@ def evaluate(
     hypotheses: list[list[str]] = []
     references: list[list[list[str]]] = []
 
-    dataloader = data_module.val_dataloader() if stage == "val" else data_module.test_dataloader()
+    dataloader = (
+        data_module.val_dataloader()
+        if stage == "val"
+        else data_module.test_dataloader()
+    )
     for i, batch in enumerate(dataloader):
         batch.to(DEVICE)
         with autocast_ctx:
@@ -280,8 +320,11 @@ def evaluate(
 
     avg_loss = total_loss / len(dataloader)
     gleu = float(gleu_score.corpus_gleu(references, hypotheses))
-    bleu = float(bleu_score.corpus_bleu(references, hypotheses)) # type: ignore
-    mlflow.log_metrics({f"{stage}_loss": avg_loss, f"{stage}_gleu": gleu, f"{stage}_bleu": bleu}, step=global_step)
+    bleu = float(bleu_score.corpus_bleu(references, hypotheses))  # type: ignore
+    mlflow.log_metrics(
+        {f"{stage}_loss": avg_loss, f"{stage}_gleu": gleu, f"{stage}_bleu": bleu},
+        step=global_step,
+    )
     return bleu, gleu
 
 
@@ -316,7 +359,7 @@ def load_data(num_samples: int) -> list[vanilla.SourceTarget]:
 
 
 def make_autocast_ctx(precision: Literal["fp32", "bf16"]) -> ContextManager:
-    use_cuda = (DEVICE.type == "cuda")
+    use_cuda = DEVICE.type == "cuda"
 
     match precision:
         case "bf16":
