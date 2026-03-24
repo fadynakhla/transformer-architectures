@@ -3,12 +3,13 @@ import dataclasses
 import math
 import multiprocessing
 
+import numpy as np
 import pydantic
 import torch
 from torch.utils import data as torchd
 
-from transformer_architectures.architectures.vanilla import tokenization
 from transformer_architectures import samplers
+from transformer_architectures.architectures.vanilla import tokenization
 
 IGNORE_ID = -100
 
@@ -57,34 +58,51 @@ class LabeledBatch:
         )
 
 
-class TransformerDataset(torchd.Dataset[dict[str, list[int]]]):
+class TransformerDataset(torchd.Dataset[dict[str, np.ndarray]]):
     def __init__(
         self, data: list[SourceTarget], tokenizer: tokenization.Tokenizer
     ) -> None:
         super().__init__()
         self.tokenizer = tokenizer
-        self.processed_data = self._process_data(data)
+        self._setup_arrays(data)
 
     def __len__(self) -> int:
-        return len(self.processed_data)
+        return len(self._input_ids_offsets) - 1
 
-    def __getitem__(self, index: int) -> dict[str, list[int]]:
-        return self.processed_data[index]
+    def __getitem__(self, index: int) -> dict[str, np.ndarray]:
+        enc_s, enc_e = (
+            self._input_ids_offsets[index],
+            self._input_ids_offsets[index + 1],
+        )
+        dec_s, dec_e = (
+            self._decoder_ids_offsets[index],
+            self._decoder_ids_offsets[index + 1],
+        )
+        return {
+            "input_ids": self._input_ids_flat[enc_s:enc_e],
+            "decoder_input_ids": self._decoder_ids_flat[dec_s:dec_e],
+        }
 
-    def _process_data(self, data: list[SourceTarget]) -> list[dict[str, list[int]]]:
-        tokenized_data = self.tokenizer(
+    def _setup_arrays(self, data: list[SourceTarget]) -> None:
+        tokenized = self.tokenizer(
             encoder_inputs=[dp.source for dp in data],
             decoder_inputs=[dp.target for dp in data],
         )
-        return [
-            {
-                "input_ids": ids,
-                "decoder_input_ids": dec_ids,
-            }
-            for ids, dec_ids in zip(
-                tokenized_data.input_ids, tokenized_data.decoder_input_ids, strict=True
-            )
-        ]
+        enc_flat: list[int] = []
+        dec_flat: list[int] = []
+        enc_offsets: list[int] = [0]
+        dec_offsets: list[int] = [0]
+        for enc_ids, dec_ids in zip(
+            tokenized.input_ids, tokenized.decoder_input_ids, strict=True
+        ):
+            enc_flat.extend(enc_ids)
+            dec_flat.extend(dec_ids)
+            enc_offsets.append(len(enc_flat))
+            dec_offsets.append(len(dec_flat))
+        self._input_ids_flat = np.array(enc_flat, dtype=np.int32)
+        self._decoder_ids_flat = np.array(dec_flat, dtype=np.int32)
+        self._input_ids_offsets = np.array(enc_offsets, dtype=np.int64)
+        self._decoder_ids_offsets = np.array(dec_offsets, dtype=np.int64)
 
 
 class TransformerDataCollator:
@@ -100,9 +118,16 @@ class TransformerDataCollator:
         self.label_pad_token_id = label_pad_token_id
         self.pad_to_multiple_of = pad_to_multiple_of
 
-    def __call__(self, batch: list[dict[str, list[int]]]) -> LabeledBatch:
+    def __call__(self, batch: list[dict[str, np.ndarray]]) -> LabeledBatch:
+        list_batch = [
+            {
+                "input_ids": sample["input_ids"].tolist(),
+                "decoder_input_ids": sample["decoder_input_ids"].tolist(),
+            }
+            for sample in batch
+        ]
         batch_encoding = self.tokenizer.pad(
-            batch,
+            list_batch,
             padding=self.padding,
             truncation=True,
             pad_to_multiple_of=self.pad_to_multiple_of,
@@ -152,14 +177,14 @@ class TransformerDataModule:
                 generator=self.generator,
             )
 
-    def train_dataloader(self) -> torchd.DataLoader[dict[str, list[int]]]:
+    def train_dataloader(self) -> torchd.DataLoader[dict[str, np.ndarray]]:
         if self.train_batch_sampler is not None:
             return torchd.DataLoader(
                 dataset=self.train_dataset,
                 batch_sampler=self.train_batch_sampler,
                 collate_fn=self.data_collator,
                 num_workers=multiprocessing.cpu_count(),
-                pin_memory=True,
+                pin_memory=False,
             )
         return torchd.DataLoader(
             dataset=self.train_dataset,
@@ -168,10 +193,10 @@ class TransformerDataModule:
             shuffle=True,
             generator=self.generator,
             num_workers=multiprocessing.cpu_count(),
-            pin_memory=True,
+            pin_memory=False,
         )
 
-    def val_dataloader(self) -> torchd.DataLoader[dict[str, list[int]]]:
+    def val_dataloader(self) -> torchd.DataLoader[dict[str, np.ndarray]]:
         return torchd.DataLoader(
             dataset=self.val_dataset,
             batch_size=self.per_device_eval_batch_size,
@@ -179,7 +204,7 @@ class TransformerDataModule:
             shuffle=False,
         )
 
-    def test_dataloader(self) -> torchd.DataLoader[dict[str, list[int]]]:
+    def test_dataloader(self) -> torchd.DataLoader[dict[str, np.ndarray]]:
         return torchd.DataLoader(
             dataset=self.test_dataset,
             batch_size=self.per_device_eval_batch_size,
@@ -187,7 +212,9 @@ class TransformerDataModule:
             shuffle=False,
         )
 
-    def dataloader(self, stage: Literal["train", "val", "test"]) -> torchd.DataLoader[dict[str, list[int]]]:
+    def dataloader(
+        self, stage: Literal["train", "val", "test"]
+    ) -> torchd.DataLoader[dict[str, np.ndarray]]:
         match stage:
             case "train":
                 return self.train_dataloader()

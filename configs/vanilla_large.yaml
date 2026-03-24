@@ -9,15 +9,15 @@ Model:
 
 Training:
   batch_size: 32
-  grad_accumulation_steps: 6
-  learning_rate: 4e-4
+  grad_accumulation_steps: 24
+  learning_rate: 5e-4
   warmup_steps: 4000
   epochs: 20
   label_smoothing: 0.1
-  num_samples: 3000000
+  num_samples: 7000000
   log_interval: 50
   log_grads: False
   precision: bf16
   # Token-budget bucketing. Uncomment to enable; batch_size is then ignored for training.
-  token_budget: 4096   # ~128 tokens avg * 128 samples, tune to GPU memory
-  sort_window: 5000     # ~100x expected samples-per-batch; trades padding vs diversity
+  token_budget: 1024   # ~128 tokens avg * 128 samples, tune to GPU memory
+  sort_window: 2000     # ~100x expected samples-per-batch; trades padding vs diversity

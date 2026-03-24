@@ -1,4 +1,5 @@
 from typing import Callable, Optional
+from collections.abc import Mapping, Sized
 
 import torch
 from torch.utils import data as torchd
@@ -14,7 +15,7 @@ class TokenBudgetBatchSampler(torchd.Sampler[list[int]]):
                Small N = more diversity, more padding; large N approaches global sort.
 
     Args:
-        dataset: Dataset returning dicts of token id lists.
+        dataset: Dataset returning dicts of token id sequences.
         token_budget: Target number of real tokens per batch. Controls batch size
             dynamically — set to batch_size * avg_seq_len to match a fixed-sample baseline.
         length_key: Dict key used to measure sequence length for bucketing.
@@ -25,7 +26,7 @@ class TokenBudgetBatchSampler(torchd.Sampler[list[int]]):
 
     def __init__(
         self,
-        dataset: torchd.Dataset[dict[str, list[int]]],
+        dataset: torchd.Dataset[Mapping[str, Sized]],
         token_budget: int,
         length_key: str = "input_ids",
         sort_window: Optional[int] = None,
@@ -39,7 +40,9 @@ class TokenBudgetBatchSampler(torchd.Sampler[list[int]]):
         n = len(dataset)  # type: ignore[arg-type]
         self._lengths = [len(dataset[i][length_key]) for i in range(n)]
         # Pre-build once with global sort for a stable __len__ approximation.
-        self._static_batches = self._pack(sorted(range(n), key=lambda i: self._lengths[i]))
+        self._static_batches = self._pack(
+            sorted(range(n), key=lambda i: self._lengths[i])
+        )
 
     def _pack(self, indices: list[int]) -> list[list[int]]:
         """Pack a length-sorted index list into token-budget batches."""
@@ -74,7 +77,9 @@ class TokenBudgetBatchSampler(torchd.Sampler[list[int]]):
     def __iter__(self):
         if self.sort_window is None:
             # Global sort — fixed batches, shuffle order each epoch.
-            for i in torch.randperm(len(self._static_batches), generator=self.generator).tolist():
+            for i in torch.randperm(
+                len(self._static_batches), generator=self.generator
+            ).tolist():
                 yield self._static_batches[i]
         else:
             yield from self._build_windowed_batches()
@@ -82,7 +87,9 @@ class TokenBudgetBatchSampler(torchd.Sampler[list[int]]):
     def __len__(self) -> int:
         if self.sort_window is None:
             return len(self._static_batches)
-        assert self.generator is not None, "generator required for exact __len__ with sort_window"
+        assert (
+            self.generator is not None
+        ), "generator required for exact __len__ with sort_window"
         state = self.generator.get_state()
         count = len(self._build_windowed_batches())
         self.generator.set_state(state)
@@ -105,4 +112,5 @@ def token_budget_sampler_factory(
             generator=generator,
             drop_last=drop_last,
         )
+
     return factory
