@@ -1,6 +1,5 @@
-from typing import Literal, Optional, Protocol, TypeVar, runtime_checkable
+from typing import Literal, Optional, TypeVar
 import dataclasses
-import math
 import multiprocessing
 
 import numpy as np
@@ -10,10 +9,10 @@ from torch.utils import data as torchd
 
 from transformer_architectures import samplers
 from transformer_architectures.architectures.vanilla import tokenization
+from transformer_architectures.training import datamodule
 
 IGNORE_ID = -100
 
-_T_co = TypeVar("_T_co", covariant=True)
 Label = TypeVar("Label", None, torch.Tensor)
 LabelMask = TypeVar("LabelMask", None, torch.Tensor)
 
@@ -21,6 +20,13 @@ LabelMask = TypeVar("LabelMask", None, torch.Tensor)
 class SourceTarget(pydantic.BaseModel):
     source: str
     target: str
+
+
+class DatasetConfig(pydantic.BaseModel):
+    data_path: str
+    num_samples: int
+    val_split: float
+    test_split: float
 
 
 @dataclasses.dataclass
@@ -119,7 +125,7 @@ class TransformerDataCollator:
         self.pad_to_multiple_of = pad_to_multiple_of
 
     def __call__(self, batch: list[dict[str, np.ndarray]]) -> LabeledBatch:
-        list_batch = [
+        list_batch: list[dict[str, list[int]]] = [
             {
                 "input_ids": sample["input_ids"].tolist(),
                 "decoder_input_ids": sample["decoder_input_ids"].tolist(),
@@ -166,7 +172,11 @@ class TransformerDataModule:
 
     def setup(self) -> None:
         full_dataset = TransformerDataset(self.data, self.tokenizer)
-        self.train_dataset, self.val_dataset, self.test_dataset = train_val_test_split(
+        (
+            self.train_dataset,
+            self.val_dataset,
+            self.test_dataset,
+        ) = datamodule.train_val_test_split_torchd(
             full_dataset, self.val_split, self.test_split, self.generator
         )
         if self.token_budget is not None:
@@ -222,28 +232,3 @@ class TransformerDataModule:
                 return self.val_dataloader()
             case "test":
                 return self.test_dataloader()
-
-
-@runtime_checkable
-class HasLen(Protocol):
-    def __len__(self) -> int:
-        ...
-
-
-DataSplit = tuple[torchd.Subset[_T_co], torchd.Subset[_T_co], torchd.Subset[_T_co]]
-
-
-def train_val_test_split(
-    dataset: torchd.Dataset[_T_co],
-    val_split: float,
-    test_split: float,
-    generator: torch.Generator,
-) -> DataSplit[_T_co]:
-    if not isinstance(dataset, HasLen):
-        raise ValueError("Dataset must implement __len__")
-    total_size = len(dataset)
-    val_size = math.floor(total_size * val_split)
-    test_size = math.floor(total_size * test_split)
-    train_size = total_size - val_size - test_size
-    subs = torchd.random_split(dataset, [train_size, val_size, test_size], generator)
-    return subs[0], subs[1], subs[2]
