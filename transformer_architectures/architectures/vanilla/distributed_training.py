@@ -17,7 +17,6 @@ from transformer_architectures import config
 from transformer_architectures.architectures import vanilla
 from transformer_architectures.architectures.vanilla import data, datamodule
 from transformer_architectures.training import base_train_config, distributed
-from transformer_architectures.training.datamodule import DataModule
 
 IGNORE_ID = -100
 
@@ -26,7 +25,7 @@ class TrainingConfig(base_train_config.BaseTrainConfig):
     learning_rate: float
     warmup_steps: int
     label_smoothing: float
-    num_samples: int
+    # num_samples: int
     # Token-budget bucketing. When set, batch_size is ignored for the train dataloader
     # and batches are sized to contain ~token_budget real tokens instead.
     token_budget: Optional[int] = None
@@ -75,10 +74,12 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         train_config: TrainingConfig,
         model_config: ModelConfig,
         dataset_config: data.DatasetConfig,
+        mlflow_config: base_train_config.MLFlowConfig,
     ) -> None:
         self.train_config = train_config
         self.model_config = model_config
         self.dataset_config = dataset_config
+        self.mlflow_config = mlflow_config
 
         self.max_bleu = 0.0
         self.max_gleu = 0.0
@@ -136,7 +137,7 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         model: nn.Module,
         batch: data.LabeledBatch,
         criterion: nn.Module,
-        autocast_ctx: ContextManager[Any, bool | None],
+        autocast_ctx: ContextManager,
     ) -> torch.Tensor:
         with autocast_ctx:
             predictions = model(
@@ -155,9 +156,9 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
     def evaluate(
         self,
         model: nn.Module,
-        data_module: DataModule,
+        data_module: distributed.DataModule,
         criterion: nn.Module,
-        autocast_ctx: ContextManager[Any, bool | None],
+        autocast_ctx: ContextManager,
         stage: str,
         epoch: int,
         global_step: int,
@@ -232,7 +233,10 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         dataset_config = config.load_config(
             path, section="Dataset", model_class=data.DatasetConfig
         )
-        return cls(train_config, model_config, dataset_config)
+        mlflow_config = config.load_config(
+            path, section="MLFlow", model_class=base_train_config.MLFlowConfig
+        )
+        return cls(train_config, model_config, dataset_config, mlflow_config)
 
 
 def make_tokenizer(config: ModelConfig) -> vanilla.Tokenizer:

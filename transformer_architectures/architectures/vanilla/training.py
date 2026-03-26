@@ -360,7 +360,7 @@ def load_data(num_samples: int) -> list[vanilla.SourceTarget]:
 
 def make_autocast_ctx(precision: Literal["fp32", "bf16"]) -> ContextManager:
     use_cuda = DEVICE.type == "cuda"
-
+    autocast_ctx: ContextManager
     match precision:
         case "bf16":
             if not use_cuda:

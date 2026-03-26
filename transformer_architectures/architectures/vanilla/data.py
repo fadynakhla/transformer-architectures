@@ -9,7 +9,7 @@ from torch.utils import data as torchd
 
 from transformer_architectures import samplers
 from transformer_architectures.architectures.vanilla import tokenization
-from transformer_architectures.training import datamodule
+from transformer_architectures.training import data_utils
 
 IGNORE_ID = -100
 
@@ -176,7 +176,7 @@ class TransformerDataModule:
             self.train_dataset,
             self.val_dataset,
             self.test_dataset,
-        ) = datamodule.train_val_test_split_torchd(
+        ) = data_utils.train_val_test_split_torchd(
             full_dataset, self.val_split, self.test_split, self.generator
         )
         if self.token_budget is not None:

@@ -8,10 +8,10 @@ from torch.utils import data as torchd
 from transformer_architectures import samplers
 from transformer_architectures.architectures.vanilla import data, tokenization
 from transformer_architectures.datasets import wmt_en_fr
-from transformer_architectures.training import datamodule, distributed
+from transformer_architectures.training import data_utils, distributed
 
 
-class TransformerDataModule(datamodule.DataModule):
+class TransformerDataModule(distributed.DataModule):
     def __init__(
         self,
         dataset_config: data.DatasetConfig,
@@ -40,19 +40,19 @@ class TransformerDataModule(datamodule.DataModule):
             full_data = load_data(
                 self.dataset_config.num_samples, self.dataset_config.data_path
             )
-            train, val, test = datamodule.train_val_test_split(
+            train, val, test = data_utils.train_val_test_split(
                 full_data,
                 self.dataset_config.val_split,
                 self.dataset_config.test_split,
                 self.seed,
             )
-            train_chunks = datamodule.split_into_chunks(train, ctx.world_size)
+            train_chunks = data_utils.split_into_chunks(train, ctx.world_size)
         else:
             train_chunks, val, test = None, None, None
 
-        local_train = datamodule.scatter_objects(train_chunks, ctx)
-        val = datamodule.broadcast_objects(val, ctx)
-        test = datamodule.broadcast_objects(test, ctx)
+        local_train = distributed.scatter_objects(train_chunks, ctx)
+        val = distributed.broadcast_objects(val, ctx)
+        test = distributed.broadcast_objects(test, ctx)
 
         self._train_dataset = data.TransformerDataset(local_train, self.tokenizer)
         self._val_dataset = data.TransformerDataset(val, self.tokenizer)

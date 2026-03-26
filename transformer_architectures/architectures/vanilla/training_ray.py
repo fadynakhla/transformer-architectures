@@ -1,30 +1,38 @@
-from typing import Any, Callable, ContextManager, Literal, Optional
-import math
-from contextlib import nullcontext
+import sys
 
-import loguru
-import mlflow
-import pydantic
-import torch
-import torch.nn as nn
-import torch.optim as optim
-
+import ray
+from ray.train import ScalingConfig
+from ray.train.torch import TorchConfig, TorchTrainer
 
 from transformer_architectures import config
-from transformer_architectures.architectures import vanilla
-from transformer_architectures.datasets import wmt_en_fr
-from transformer_architectures.training import checkpointing, grad_logging
-
-
-logger = loguru.logger
-
-
-mlflow.set_tracking_uri("http://10.9.9.249:5000")
-mlflow.set_experiment("Vanilla Transformer Large - ENFR Distributed")
-mlflow.config.enable_system_metrics_logging()  # pyright: ignore[reportPrivateImportUsage]
-mlflow.config.set_system_metrics_sampling_interval(  # pyright: ignore[reportPrivateImportUsage]
-    30
+from transformer_architectures.architectures.vanilla.distributed_training import (
+    TrainableTransformer,
 )
+from transformer_architectures.training.base_train_config import RayConfig
+
+CONFIG_PATH = "configs/vanilla_large_distributed.yaml"
 
 
-CONFIG_PATH = "configs/vanilla_large.yaml"
+def main() -> None:
+    config_path = sys.argv[1] if len(sys.argv) > 1 else CONFIG_PATH
+    ray_config = config.load_config(
+        config_path, section="Distributed", model_class=RayConfig
+    )
+    ray.init(address=ray_config.address)
+    arch = TrainableTransformer.from_yaml_config(config_path)
+
+    trainer = TorchTrainer(
+        train_loop_per_worker=arch.distributed_train_loop,
+        scaling_config=ScalingConfig(
+            num_workers=ray_config.num_workers,
+            use_gpu=ray_config.use_gpu,
+            resources_per_worker={"GPU": 1},
+        ),
+        torch_config=TorchConfig(backend=ray_config.backend),
+    )
+    result = trainer.fit()
+    print(f"Training finished. Result: {result}")
+
+
+if __name__ == "__main__":
+    main()

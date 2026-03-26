@@ -9,8 +9,21 @@ class BaseTrainConfig(pydantic.BaseModel):
     grad_accumulation_steps: int
     epochs: int
     eval_metric: str
-    maximize_eval: bool = True
     comparator: Literal[">", "<"] = ">"
     log_interval: int = 25
     log_grad_distributions: bool = False
     precision: Literal["fp32", "bf16"] = "bf16"
+
+
+class MLFlowConfig(pydantic.BaseModel):
+    tracking_uri: str
+    experiment_name: str
+    enable_system_metrics: bool = True
+    system_metrics_interval: int = 30
+
+
+class RayConfig(pydantic.BaseModel):
+    address: str = "auto"
+    num_workers: int
+    use_gpu: bool = True
+    backend: str = "nccl"
