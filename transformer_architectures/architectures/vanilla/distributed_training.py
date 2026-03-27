@@ -7,11 +7,11 @@ import pydantic
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import LRScheduler
 from nltk.translate import (  # pyright: ignore[reportMissingTypeStubs]
     bleu_score,
     gleu_score,
 )
+from torch.optim.lr_scheduler import LRScheduler
 
 from transformer_architectures import config
 from transformer_architectures.architectures import vanilla
@@ -161,7 +161,7 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         stage: str,
         epoch: int,
         global_step: int,
-        distributed_ctx: distributed.DistributedContext
+        distributed_ctx: distributed.DistributedContext,
     ) -> dict[str, float]:
         total_loss = 0.0
 
@@ -188,13 +188,20 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
                 predicted_sequences, batch.target == IGNORE_ID, 0
             )
             hypotheses.extend(
-                [p.split() for p in data_module.tokenizer.batch_decode(predicted_sequences)]
+                [
+                    p.split()
+                    for p in data_module.tokenizer.batch_decode(predicted_sequences)
+                ]
             )
             targets = torch.masked_fill(batch.target, batch.target == IGNORE_ID, 0)
             references.extend(
                 [[t.split()] for t in data_module.tokenizer.batch_decode(targets)]
             )
-            if distributed_ctx.is_head and i == 0 and (stage == "test" or epoch % 5 == 0):
+            if (
+                distributed_ctx.is_head
+                and i == 0
+                and (stage == "test" or epoch % 5 == 0)
+            ):
                 for j, (h, r) in enumerate(zip(hypotheses, references)):
                     mlflow.log_text(
                         text=f"{h}",
@@ -210,12 +217,14 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         bleu = float(bleu_score.corpus_bleu(references, hypotheses))  # type: ignore
         if distributed_ctx.is_head:
             mlflow.log_metrics(
-                {f"{stage}_loss": avg_loss, f"{stage}_gleu": gleu, f"{stage}_bleu": bleu},
+                {
+                    f"{stage}_loss": avg_loss,
+                    f"{stage}_gleu": gleu,
+                    f"{stage}_bleu": bleu,
+                },
                 step=global_step,
             )
         return {"avg_loss": avg_loss, "gleu": gleu, "bleu": bleu}
-
-
 
     @functools.cached_property
     def tokenizer(self) -> vanilla.Tokenizer:

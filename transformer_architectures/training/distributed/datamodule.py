@@ -6,12 +6,10 @@ from torch.utils import data as torchd
 
 from transformer_architectures.training.distributed import context
 
-
 _T = TypeVar("_T")
 
 
 class DataModule(Protocol):
-
     generator: torch.Generator
 
     _train_dataset: torchd.Dataset | None = None

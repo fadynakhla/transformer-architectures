@@ -24,7 +24,7 @@ Training:
 
 Dataset:
   data_path: /data/datasets/wmt/en-fr
-  num_samples: 10000000
+  num_samples: 20000000
   val_split: 0.05
   test_split: 0.05
 

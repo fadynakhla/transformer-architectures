@@ -76,7 +76,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         stage: str,
         epoch: int,
         global_step: int,
-        distributed_ctx: context.DistributedContext
+        distributed_ctx: context.DistributedContext,
     ) -> dict[str, float]:
         ...
 
@@ -156,7 +156,6 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         with mlflow_ctx:
             self.run_training(distributed_ctx)
 
-
     def run_training(self, distributed_ctx: context.DistributedContext):
         model = self.build_model()
         model = ray.train.torch.prepare_model(model)
@@ -167,59 +166,61 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         if distributed_ctx.is_head:
             mlflow.log_params(params=self.make_run_params())
             mlflow.log_text(
-                    text=f"{data_module.train_dataset[0]}",
-                    artifact_file="sample_batch.txt",
-                )
-        autocast_ctx = make_autocast_ctx(
-                self.train_config.precision, distributed_ctx.device
+                text=f"{data_module.train_dataset[0]}",
+                artifact_file="sample_batch.txt",
             )
+        autocast_ctx = make_autocast_ctx(
+            self.train_config.precision, distributed_ctx.device
+        )
         criterion = self.build_criterion()
         optimizer = self.build_optimizer(model)
         epoch_steps = math.ceil(
-                len(data_module.train_dataloader())
-                / self.train_config.grad_accumulation_steps
-            )
+            len(data_module.train_dataloader())
+            / self.train_config.grad_accumulation_steps
+        )
         scheduler = self.build_scheduler(optimizer, epoch_steps)
         global_step = 0
         best_eval = 0.0 if self.train_config.comparator == ">" else 1e9
         for epoch in range(self.train_config.epochs):
             global_step = self.train_epoch(
-                    model,  # type: ignore
-                    data_module,
-                    criterion,
-                    optimizer,
-                    scheduler,
-                    self.train_config.grad_accumulation_steps,
-                    epoch,
-                    global_step,
-                    self.train_config.log_interval,
-                    self.train_config.log_grad_distributions,
-                    autocast_ctx,
-                    distributed_ctx,
-                )
+                model,  # type: ignore
+                data_module,
+                criterion,
+                optimizer,
+                scheduler,
+                self.train_config.grad_accumulation_steps,
+                epoch,
+                global_step,
+                self.train_config.log_interval,
+                self.train_config.log_grad_distributions,
+                autocast_ctx,
+                distributed_ctx,
+            )
             eval_results = self.evaluate(
-                    unwrap_model(model),
-                    data_module,
-                    criterion,
-                    autocast_ctx,
-                    stage="val",
-                    epoch=epoch,
-                    global_step=global_step,
-                    distributed_ctx=distributed_ctx
-                )
+                unwrap_model(model),
+                data_module,
+                criterion,
+                autocast_ctx,
+                stage="val",
+                epoch=epoch,
+                global_step=global_step,
+                distributed_ctx=distributed_ctx,
+            )
             eval_score = eval_results[self.train_config.eval_metric]
             if eval(f"{eval_score} {self.train_config.comparator} {best_eval}"):
-                logger.info(f"New best {self.train_config.eval_metric} result: {eval_score}. Saving checkpoint.")
+                logger.info(
+                    f"New best {self.train_config.eval_metric} result: {eval_score}. Saving checkpoint."
+                )
                 best_eval = eval_score
                 checkpointing.save_checkpoint(
-                        unwrap_model(model),
-                        optimizer,
-                        scheduler,
-                        data_module.generator,
-                        self.architecture_name,
-                        epoch,
-                        global_step,
-                    )
+                    unwrap_model(model),
+                    optimizer,
+                    scheduler,
+                    data_module.generator,
+                    self.architecture_name,
+                    epoch,
+                    global_step,
+                )
         eval_results = self.evaluate(
             unwrap_model(model),
             data_module,
@@ -228,7 +229,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
             stage="test",
             epoch=self.train_config.epochs,
             global_step=global_step,
-            distributed_ctx=distributed_ctx
+            distributed_ctx=distributed_ctx,
         )
 
     def mlflow_setup(self, distributed_ctx: context.DistributedContext):

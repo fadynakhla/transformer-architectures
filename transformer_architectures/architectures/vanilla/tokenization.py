@@ -1,5 +1,5 @@
-import multiprocessing
 from typing import Generic, Literal, Optional, TypeVar, overload
+import multiprocessing
 
 import pydantic
 import torch
@@ -135,8 +135,12 @@ class Tokenizer(tokenization.BaseTokenizer):
     ) -> BatchEncoding:
         input_ids: list[list[int]] | torch.Tensor
         decoder_input_ids: list[list[int]] | torch.Tensor
-        input_ids = self.encoding.encode_batch(encoder_inputs, num_threads=multiprocessing.cpu_count())
-        decoder_input_ids = self.encoding.encode_batch(decoder_inputs, num_threads=multiprocessing.cpu_count())
+        input_ids = self.encoding.encode_batch(
+            encoder_inputs, num_threads=multiprocessing.cpu_count()
+        )
+        decoder_input_ids = self.encoding.encode_batch(
+            decoder_inputs, num_threads=multiprocessing.cpu_count()
+        )
         input_ids = [
             [self.bos_token_id] + input_ids + [self.eos_token_id]
             for input_ids in input_ids

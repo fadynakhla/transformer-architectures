@@ -11,7 +11,6 @@ from transformer_architectures.architectures.vanilla import data, tokenization
 from transformer_architectures.datasets import wmt_en_fr
 from transformer_architectures.training import data_utils, distributed
 
-
 logger = loguru.logger
 
 
@@ -64,7 +63,6 @@ class TransformerDataModule(distributed.DataModule):
         if ctx.is_head:
             logger.info("All data scattered/broadcasted.")
             logger.info("Creating datasets on all workers.")
-
 
         self._train_dataset = data.TransformerDataset(local_train, self.tokenizer)
         self._val_dataset = data.TransformerDataset(val, self.tokenizer)

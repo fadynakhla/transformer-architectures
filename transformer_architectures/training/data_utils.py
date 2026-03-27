@@ -12,7 +12,6 @@ _T = TypeVar("_T")
 _T_co = TypeVar("_T_co", covariant=True)
 
 
-
 @runtime_checkable
 class HasLen(Protocol):
     def __len__(self) -> int:
