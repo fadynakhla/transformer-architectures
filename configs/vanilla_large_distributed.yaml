@@ -10,7 +10,7 @@ Model:
 Training:
   per_device_train_batch_size: 8
   per_device_eval_batch_size: 16
-  grad_accumulation_steps: 24
+  grad_accumulation_steps: 12
   learning_rate: 5e-4
   warmup_steps: 4000
   epochs: 20
@@ -24,7 +24,7 @@ Training:
 
 Dataset:
   data_path: /data/datasets/wmt/en-fr
-  num_samples: 100000
+  num_samples: 10000000
   val_split: 0.05
   test_split: 0.05
 
@@ -36,6 +36,6 @@ MLFlow:
 
 Distributed:
   address: auto
-  num_workers: 1
+  num_workers: 2
   use_gpu: true
   backend: nccl

@@ -1,6 +1,11 @@
 from typing import Generator
 import os
 
+import loguru
+
+
+logger = loguru.logger
+
 
 def load_parallel_sentences(
     directory: str, lang1: str = "en", lang2: str = "fr", num_samples: int = 100000
@@ -22,12 +27,14 @@ def load_parallel_sentences(
     if not os.path.exists(file1) or not os.path.exists(file2):
         raise FileNotFoundError(f"Expected files {file1} and {file2} not found.")
 
+    logger.info(f"loading {num_samples} samples from WMT English to French dataset.")
     with open(file1, "r", encoding="utf-8") as f1, open(
         file2, "r", encoding="utf-8"
     ) as f2:
         i = 0
         for line1, line2 in zip(f1, f2):
             if i == num_samples:
+                logger.info(f"finished looading {num_samples} dataset samples")
                 break
             yield line1.strip(), line2.strip()
             i += 1

@@ -1,6 +1,7 @@
 from typing import Optional
 import multiprocessing
 
+import loguru
 import numpy as np
 import torch
 from torch.utils import data as torchd
@@ -9,6 +10,9 @@ from transformer_architectures import samplers
 from transformer_architectures.architectures.vanilla import data, tokenization
 from transformer_architectures.datasets import wmt_en_fr
 from transformer_architectures.training import data_utils, distributed
+
+
+logger = loguru.logger
 
 
 class TransformerDataModule(distributed.DataModule):
@@ -37,26 +41,36 @@ class TransformerDataModule(distributed.DataModule):
 
     def setup(self, ctx: distributed.DistributedContext) -> None:
         if ctx.is_head:
+            logger.info("Loading dataset on rank 0 node.")
             full_data = load_data(
                 self.dataset_config.num_samples, self.dataset_config.data_path
             )
+            logger.info("Spliting dataset into train / val / test.")
             train, val, test = data_utils.train_val_test_split(
                 full_data,
                 self.dataset_config.val_split,
                 self.dataset_config.test_split,
                 self.seed,
             )
+            logger.info(f"Chunking train data into {ctx.world_size} pieces.")
             train_chunks = data_utils.split_into_chunks(train, ctx.world_size)
+
         else:
             train_chunks, val, test = None, None, None
 
         local_train = distributed.scatter_objects(train_chunks, ctx)
         val = distributed.broadcast_objects(val, ctx)
         test = distributed.broadcast_objects(test, ctx)
+        if ctx.is_head:
+            logger.info("All data scattered/broadcasted.")
+            logger.info("Creating datasets on all workers.")
+
 
         self._train_dataset = data.TransformerDataset(local_train, self.tokenizer)
         self._val_dataset = data.TransformerDataset(val, self.tokenizer)
         self._test_dataset = data.TransformerDataset(test, self.tokenizer)
+        if ctx.is_head:
+            logger.info("Datasets initialized.")
 
         # if self.token_budget is not None:
         #     self.train_batch_sampler = samplers.TokenBudgetBatchSampler(

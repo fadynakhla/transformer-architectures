@@ -25,7 +25,6 @@ class TrainingConfig(base_train_config.BaseTrainConfig):
     learning_rate: float
     warmup_steps: int
     label_smoothing: float
-    # num_samples: int
     # Token-budget bucketing. When set, batch_size is ignored for the train dataloader
     # and batches are sized to contain ~token_budget real tokens instead.
     token_budget: Optional[int] = None
