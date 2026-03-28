@@ -99,6 +99,8 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
 
         dataloader = data_module.train_dataloader()
         total_batches = len(dataloader)
+        total_batches = synchronize_int_min(total_batches, distributed_ctx)
+
         total_groups = math.ceil(total_batches / gradient_accumulation_steps)
         accumulated_loss = 0.0
 
@@ -181,6 +183,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
             len(data_module.train_dataloader())
             / self.train_config.grad_accumulation_steps
         )
+        epoch_steps = synchronize_int_min(epoch_steps, distributed_ctx)
         scheduler = self.build_scheduler(optimizer, epoch_steps)
         global_step = 0
         best_eval = 0.0 if self.train_config.comparator == ">" else 1e9
@@ -286,3 +289,12 @@ def log_train_metrics(
     )
 
     grad_logging.log_grads(unwrap_model(model), step, log_distributions)
+
+
+def synchronize_int_min(val_to_sync: int, distributed_ctx: context.DistributedContext) -> int:
+    # Synchronize to the shortest rank when using variable-length samplers
+    if distributed_ctx.world_size > 1:
+        t = torch.tensor([val_to_sync], device=distributed_ctx.device)
+        torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.MIN)
+        val_to_sync = int(t.item())
+    return val_to_sync

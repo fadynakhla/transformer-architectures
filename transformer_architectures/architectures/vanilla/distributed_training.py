@@ -270,8 +270,7 @@ def make_cosine_schedule(warmup_steps: int, total_steps: int) -> Callable[[int],
     def schedule(step: int) -> float:
         if step < warmup_steps:
             return step / warmup_steps
-        return 0.5 * (
-            1 + math.cos(math.pi * (step - warmup_steps) / (total_steps - warmup_steps))
-        )
+        progress = min(1.0, (step - warmup_steps) / (total_steps - warmup_steps))
+        return 0.5 * (1 + math.cos(math.pi * progress))
 
     return schedule
