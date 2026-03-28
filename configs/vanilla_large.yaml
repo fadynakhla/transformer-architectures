@@ -14,10 +14,10 @@ Training:
   warmup_steps: 4000
   epochs: 20
   label_smoothing: 0.1
-  num_samples: 7000000
+  num_samples: 50000
   log_interval: 50
   log_grads: False
   precision: bf16
   # Token-budget bucketing. Uncomment to enable; batch_size is then ignored for training.
-  token_budget: 1024   # ~128 tokens avg * 128 samples, tune to GPU memory
-  sort_window: 2000     # ~100x expected samples-per-batch; trades padding vs diversity
+  # token_budget: 1024 # ~128 tokens avg * 128 samples, tune to GPU memory
+  # sort_window: 2000 # ~100x expected samples-per-batch; trades padding vs diversity

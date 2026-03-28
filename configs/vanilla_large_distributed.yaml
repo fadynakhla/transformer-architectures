@@ -10,7 +10,7 @@ Model:
 Training:
   per_device_train_batch_size: 8
   per_device_eval_batch_size: 16
-  grad_accumulation_steps: 24
+  grad_accumulation_steps: 6
   learning_rate: 5e-4
   warmup_steps: 4000
   epochs: 20
@@ -21,20 +21,20 @@ Training:
   log_grad_distributions: false
   precision: bf16
   # Token-budget bucketing. Uncomment to enable; batch_size is then ignored for training.
-  token_budget: 512
-  sort_window: 2000
+  token_budget: 2048
+  sort_window: 80000
 
 Dataset:
   data_path: /data/datasets/wmt/en-fr
-  num_samples: 20000
+  num_samples: 15000000
   val_split: 0.05
   test_split: 0.05
 
 MLFlow:
   tracking_uri: http://10.9.9.249:5000
   experiment_name: "Vanilla Transformer Large - ENFR Distributed"
-  enable_system_metrics: false
-  system_metrics_interval: 30
+  enable_system_metrics: true
+  system_metrics_interval: 60
 
 Distributed:
   address: auto
