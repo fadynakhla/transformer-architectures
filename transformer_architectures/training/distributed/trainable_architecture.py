@@ -1,3 +1,4 @@
+import socket
 from typing import Any, ContextManager, Generic, Literal, Protocol, TypeVar
 import abc
 import contextlib
@@ -29,6 +30,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
     architecture_name: str
     train_config: _TC
     mlflow_config: base_train_config.MLFlowConfig
+    mlflow_run_id: str | None
 
     @abc.abstractmethod
     def build_model(self) -> nn.Module:
@@ -155,10 +157,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
     def distributed_train_loop(self) -> None:
         distributed_ctx = context.DistributedContext.from_ray_context()
         self.mlflow_setup(distributed_ctx)
-        mlflow_ctx = (
-            mlflow.start_run() if distributed_ctx.is_head else contextlib.nullcontext()
-        )
-        with mlflow_ctx:
+        with mlflow.start_run(run_id=self.mlflow_run_id):
             self.run_training(distributed_ctx)
 
     def run_training(self, distributed_ctx: context.DistributedContext):
@@ -239,14 +238,17 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         )
 
     def mlflow_setup(self, distributed_ctx: context.DistributedContext):
-        if distributed_ctx.is_head:
-            mlflow.set_tracking_uri(self.mlflow_config.tracking_uri)
-            mlflow.set_experiment(self.mlflow_config.experiment_name)
-            if self.mlflow_config.enable_system_metrics:
-                mlflow.config.enable_system_metrics_logging()  # pyright: ignore[reportPrivateImportUsage]
-                mlflow.config.set_system_metrics_sampling_interval(  # pyright: ignore[reportPrivateImportUsage]
-                    self.mlflow_config.system_metrics_interval
-                )
+        if self.mlflow_run_id is None and not distributed_ctx.is_head:
+            return
+        mlflow.set_tracking_uri(self.mlflow_config.tracking_uri)
+        mlflow.set_experiment(self.mlflow_config.experiment_name)
+        if self.mlflow_config.enable_system_metrics:
+            node_id = f"{socket.gethostname()}-rank{distributed_ctx.world_rank}"
+            mlflow.set_system_metrics_node_id(node_id)
+            mlflow.config.enable_system_metrics_logging()  # pyright: ignore[reportPrivateImportUsage]
+            mlflow.config.set_system_metrics_sampling_interval(  # pyright: ignore[reportPrivateImportUsage]
+                self.mlflow_config.system_metrics_interval
+            )
 
 
 def make_autocast_ctx(
