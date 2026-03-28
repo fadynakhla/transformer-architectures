@@ -82,7 +82,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
 
     def train_epoch(
         self,
-        model: torch.nn.parallel.DistributedDataParallel,
+        model: nn.Module,
         data_module: datamodule.DataModule,
         criterion: nn.Module,
         optimizer: optim.Optimizer,
@@ -114,7 +114,10 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                 i + 1
             ) % gradient_accumulation_steps == 0 or i == total_batches - 1
             sync_context = (
-                contextlib.nullcontext() if is_update_step else model.no_sync()
+                contextlib.nullcontext()
+                if is_update_step
+                or not isinstance(model, torch.nn.parallel.DistributedDataParallel)
+                else model.no_sync()
             )
             with sync_context:
                 loss = self.train_step(model, batch, criterion, autocast_ctx)

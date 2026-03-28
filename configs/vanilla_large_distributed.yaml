@@ -16,7 +16,6 @@ Training:
   epochs: 20
   label_smoothing: 0.1
   eval_metric: bleu
-  maximize_eval: true
   comparator: ">"
   log_interval: 50
   log_grad_distributions: false
@@ -24,7 +23,7 @@ Training:
 
 Dataset:
   data_path: /data/datasets/wmt/en-fr
-  num_samples: 20000000
+  num_samples: 20000
   val_split: 0.05
   test_split: 0.05
 
@@ -36,6 +35,6 @@ MLFlow:
 
 Distributed:
   address: auto
-  num_workers: 2
+  num_workers: 1
   use_gpu: true
   backend: nccl
