@@ -36,7 +36,9 @@ class TrainingConfig(base_train_config.BaseTrainConfig):
             return {
                 "batch_sampling": "token_budget",
                 "per_device_token_budget": self.token_budget,
-                "token_budget": self.token_budget * self.grad_accumulation_steps,
+                "token_budget": self.token_budget
+                * self.grad_accumulation_steps
+                * torch.distributed.get_world_size(),
                 "sort_window": self.sort_window,
             }
         return {
@@ -74,7 +76,7 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         model_config: ModelConfig,
         dataset_config: data.DatasetConfig,
         mlflow_config: base_train_config.MLFlowConfig,
-        mlflow_run_id: str | None
+        mlflow_run_id: str | None,
     ) -> None:
         self.train_config = train_config
         self.model_config = model_config
@@ -101,6 +103,8 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
             tokenizer=self.tokenizer,
             per_device_train_batch_size=self.train_config.per_device_train_batch_size,
             per_device_eval_batch_size=self.train_config.per_device_eval_batch_size,
+            token_budget=self.train_config.token_budget,
+            sort_window=self.train_config.sort_window
         )
 
     def build_optimizer(self, model: nn.Module) -> optim.Optimizer:
@@ -233,7 +237,9 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         return make_tokenizer(self.model_config)
 
     @classmethod
-    def from_yaml_config(cls, path: str, mlflow_run_id: str | None) -> "TrainableTransformer":
+    def from_yaml_config(
+        cls, path: str, mlflow_run_id: str | None
+    ) -> "TrainableTransformer":
         model_config = config.load_config(
             path, section="Model", model_class=ModelConfig
         )
@@ -246,7 +252,9 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         mlflow_config = config.load_config(
             path, section="MLFlow", model_class=base_train_config.MLFlowConfig
         )
-        return cls(train_config, model_config, dataset_config, mlflow_config, mlflow_run_id)
+        return cls(
+            train_config, model_config, dataset_config, mlflow_config, mlflow_run_id
+        )
 
 
 def make_tokenizer(config: ModelConfig) -> vanilla.Tokenizer:
