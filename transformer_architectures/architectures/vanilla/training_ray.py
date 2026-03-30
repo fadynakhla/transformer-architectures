@@ -22,7 +22,7 @@ def main() -> None:
     mlflow_config = config.load_config(
         config_path, section="MLFlow", model_class=MLFlowConfig
     )
-    ray.init(address=ray_config.address)
+    ray.init()
     mlflow.set_tracking_uri(mlflow_config.tracking_uri)
     mlflow.set_experiment(mlflow_config.experiment_name)
     with mlflow.start_run() as run:

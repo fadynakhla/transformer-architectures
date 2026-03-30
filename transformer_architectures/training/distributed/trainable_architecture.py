@@ -133,8 +133,8 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                 optimizer.step()
                 scheduler.step()
                 if progress_bar is not None:
+                    progress_bar.set_postfix({"loss": accumulated_loss}, refresh=False)
                     progress_bar.update(1)
-                    progress_bar.set_postfix({"loss": accumulated_loss})
 
                 if distributed_ctx.is_head and global_step % log_interval == 0:
                     lr = float(scheduler.get_last_lr()[0])

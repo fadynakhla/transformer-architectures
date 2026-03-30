@@ -22,7 +22,7 @@ Training:
   precision: bf16
   # Token-budget bucketing. Uncomment to enable; batch_size is then ignored for training.
   token_budget: 1024
-  sort_window: 45000
+  sort_window: 120000
 
 Dataset:
   data_path: /data/datasets/wmt/en-fr

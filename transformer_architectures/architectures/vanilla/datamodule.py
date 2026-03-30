@@ -71,7 +71,9 @@ class TransformerDataModule(distributed.DataModule):
             logger.info("Datasets initialized.")
 
         if self.token_budget is not None:
-            logger.info(f"Creating token budget sampler with budget: {self.token_budget}, sort window: {self.sort_window}")
+            logger.info(
+                f"Creating token budget sampler with budget: {self.token_budget}, sort window: {self.sort_window}"
+            )
             self.train_batch_sampler = samplers.TokenBudgetBatchSampler(
                 dataset=self.train_dataset,
                 token_budget=self.token_budget,
@@ -80,13 +82,14 @@ class TransformerDataModule(distributed.DataModule):
             )
 
     def train_dataloader(self) -> torchd.DataLoader[dict[str, np.ndarray]]:
+        num_workers = max(1, multiprocessing.cpu_count() // 4)
         if self.train_batch_sampler is not None:
             logger.info("Creating train dataloader with token budget sampler")
             return torchd.DataLoader(
                 dataset=self.train_dataset,
                 batch_sampler=self.train_batch_sampler,
                 collate_fn=self.data_collator,
-                num_workers=multiprocessing.cpu_count(),
+                num_workers=num_workers,
                 pin_memory=False,
             )
         logger.info("Creating train dataloader with fixed batch sampling")
@@ -96,7 +99,7 @@ class TransformerDataModule(distributed.DataModule):
             collate_fn=self.data_collator,
             shuffle=True,
             generator=self.generator,
-            num_workers=multiprocessing.cpu_count(),
+            num_workers=num_workers,
             pin_memory=False,
         )
 
