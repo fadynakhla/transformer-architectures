@@ -110,8 +110,8 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         if distributed_ctx.is_head:
             progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
         for i, batch in enumerate(dataloader):
-            # if i == 0 and distributed_ctx.is_head:
-            #     log_batch(batch, global_step, epoch)
+            if i >= total_batches:
+                break
             batch.to(distributed_ctx.device)
 
             is_update_step = (
@@ -201,6 +201,8 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                 autocast_ctx,
                 distributed_ctx,
             )
+            if not distributed_ctx.is_head:
+                continue
             eval_results = self.evaluate(
                 unwrap_model(model),
                 data_module,
@@ -226,16 +228,17 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                     epoch,
                     global_step,
                 )
-        eval_results = self.evaluate(
-            unwrap_model(model),
-            data_module,
-            criterion,
-            autocast_ctx,
-            stage="test",
-            epoch=self.train_config.epochs,
-            global_step=global_step,
-            distributed_ctx=distributed_ctx,
-        )
+        if distributed_ctx.is_head:
+            eval_results = self.evaluate(
+                unwrap_model(model),
+                data_module,
+                criterion,
+                autocast_ctx,
+                stage="test",
+                epoch=self.train_config.epochs,
+                global_step=global_step,
+                distributed_ctx=distributed_ctx,
+            )
 
     def mlflow_setup(self, distributed_ctx: context.DistributedContext):
         if self.mlflow_run_id is None and not distributed_ctx.is_head:
