@@ -17,7 +17,8 @@ Label = TypeVar("Label", None, torch.Tensor)
 LabelMask = TypeVar("LabelMask", None, torch.Tensor)
 
 
-class SourceTarget(pydantic.BaseModel):
+@dataclasses.dataclass
+class SourceTarget:
     source: str
     target: str
 

@@ -1,3 +1,4 @@
+import multiprocessing
 import sys
 
 import mlflow
@@ -33,7 +34,7 @@ def main() -> None:
             scaling_config=ScalingConfig(
                 num_workers=ray_config.num_workers,
                 use_gpu=ray_config.use_gpu,
-                resources_per_worker={"GPU": 1},
+                resources_per_worker={"GPU": 1, "CPU": 16},
             ),
             torch_config=TorchConfig(backend=ray_config.backend),
         )

@@ -82,6 +82,9 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
     ) -> dict[str, float]:
         ...
 
+    @abc.abstractmethod
+    def log_batch(self, batch: Any, step: int, epoch: int) -> None: ...
+
     def train_epoch(
         self,
         model: nn.Module,
@@ -89,7 +92,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         criterion: nn.Module,
         optimizer: optim.Optimizer,
         scheduler: optim.lr_scheduler.LRScheduler,
-        gradient_accumulation_steps: int,
+        grad_accumulation_steps: int,
         epoch: int,
         global_step: int,
         log_interval: int,
@@ -103,20 +106,28 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         total_batches = len(dataloader)
         total_batches = synchronize_int_min(total_batches, distributed_ctx)
 
-        total_groups = math.ceil(total_batches / gradient_accumulation_steps)
+        total_groups, final_acc_steps = divmod(total_batches, grad_accumulation_steps)
+        if final_acc_steps:
+            total_groups += 1
+        else:
+            final_acc_steps = grad_accumulation_steps
+
         accumulated_loss = 0.0
 
         progress_bar: tqdm.tqdm | None = None
         if distributed_ctx.is_head:
             progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
         for i, batch in enumerate(dataloader):
+            if i == 0 and distributed_ctx.is_head:
+                self.log_batch(batch, global_step, epoch)
             if i >= total_batches:
                 break
             batch.to(distributed_ctx.device)
 
-            is_update_step = (
-                i + 1
-            ) % gradient_accumulation_steps == 0 or i == total_batches - 1
+            is_grad_acc_step = (i + 1) % grad_accumulation_steps == 0
+            is_final_step = i == total_batches - 1
+            is_update_step = is_grad_acc_step or is_final_step
+
             sync_context = (
                 contextlib.nullcontext()
                 if is_update_step
@@ -125,7 +136,8 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
             )
             with sync_context:
                 loss = self.train_step(model, batch, criterion, autocast_ctx)
-                loss /= gradient_accumulation_steps
+                acc_norm = final_acc_steps if is_final_step else grad_accumulation_steps
+                loss /= acc_norm
                 loss.backward()
                 accumulated_loss += loss.detach().item()
 
@@ -136,13 +148,15 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                     progress_bar.set_postfix({"loss": accumulated_loss}, refresh=False)
                     progress_bar.update(1)
 
-                if distributed_ctx.is_head and global_step % log_interval == 0:
+                is_log_step = global_step % log_interval == 0
+                if distributed_ctx.is_head and (is_log_step or is_final_step):
                     lr = float(scheduler.get_last_lr()[0])
                     log_train_metrics(
                         model=model,
                         loss=accumulated_loss,
                         lr=lr,
                         epoch=epoch,
+                        epoch_frac=epoch + (i / total_batches),
                         step=global_step,
                         log_distributions=log_grad_distributions,
                     )
@@ -201,33 +215,33 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                 autocast_ctx,
                 distributed_ctx,
             )
-            if not distributed_ctx.is_head:
-                continue
-            eval_results = self.evaluate(
-                unwrap_model(model),
-                data_module,
-                criterion,
-                autocast_ctx,
-                stage="val",
-                epoch=epoch,
-                global_step=global_step,
-                distributed_ctx=distributed_ctx,
-            )
-            eval_score = eval_results[self.train_config.eval_metric]
-            if eval(f"{eval_score} {self.train_config.comparator} {best_eval}"):
-                logger.info(
-                    f"New best {self.train_config.eval_metric} result: {eval_score}. Saving checkpoint."
-                )
-                best_eval = eval_score
-                checkpointing.save_checkpoint(
+            if distributed_ctx.is_head:
+                eval_results = self.evaluate(
                     unwrap_model(model),
-                    optimizer,
-                    scheduler,
-                    data_module.generator,
-                    self.architecture_name,
-                    epoch,
-                    global_step,
+                    data_module,
+                    criterion,
+                    autocast_ctx,
+                    stage="val",
+                    epoch=epoch,
+                    global_step=global_step - 1,
+                    distributed_ctx=distributed_ctx,
                 )
+                eval_score = eval_results[self.train_config.eval_metric]
+                if eval(f"{eval_score} {self.train_config.comparator} {best_eval}"):
+                    logger.info(
+                        f"New best {self.train_config.eval_metric} result: {eval_score}. Saving checkpoint."
+                    )
+                    best_eval = eval_score
+                    checkpointing.save_checkpoint(
+                        unwrap_model(model),
+                        optimizer,
+                        scheduler,
+                        data_module.generator,
+                        self.architecture_name,
+                        epoch,
+                        global_step,
+                    )
+            torch.distributed.barrier()
         if distributed_ctx.is_head:
             eval_results = self.evaluate(
                 unwrap_model(model),
@@ -236,9 +250,10 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                 autocast_ctx,
                 stage="test",
                 epoch=self.train_config.epochs,
-                global_step=global_step,
+                global_step=global_step - 1,
                 distributed_ctx=distributed_ctx,
             )
+        torch.distributed.barrier()
 
     def mlflow_setup(self, distributed_ctx: context.DistributedContext):
         if self.mlflow_run_id is None and not distributed_ctx.is_head:
@@ -286,11 +301,12 @@ def log_train_metrics(
     loss: float,
     lr: float,
     epoch: int,
+    epoch_frac: float,
     step: int,
     log_distributions: bool,
 ) -> None:
     mlflow.log_metrics(
-        {"train_loss": loss, "learning_rate": lr, "epoch": epoch}, step=step
+        {"train_loss": loss, "learning_rate": lr, "epoch": epoch, "epoch_frac": epoch_frac}, step=step
     )
 
     grad_logging.log_grads(unwrap_model(model), step, log_distributions)

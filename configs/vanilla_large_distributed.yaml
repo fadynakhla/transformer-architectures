@@ -25,10 +25,11 @@ Training:
   sort_window: 120000
 
 Dataset:
-  data_path: /data/datasets/wmt/en-fr
+  data_path: /data/datasets/wmt/english-french-2014-kaggle
+  # data_path: /data/datasets/wmt/en-fr
   num_samples: 16000000
-  val_split: 0.05
-  test_split: 0.05
+  val_split: 0.01
+  test_split: 0.01
 
 MLFlow:
   tracking_uri: http://10.9.9.249:5000

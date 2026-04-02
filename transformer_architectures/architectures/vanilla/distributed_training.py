@@ -174,7 +174,7 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         hypotheses: list[list[str]] = []
         references: list[list[list[str]]] = []
 
-        dataloader = data_module.dataloader(stage)
+        dataloader = data_module.dataloader(stage) # type: ignore
         for i, batch in enumerate(dataloader):
             batch.to(distributed_ctx.device)
             with autocast_ctx:
@@ -254,6 +254,16 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         )
         return cls(
             train_config, model_config, dataset_config, mlflow_config, mlflow_run_id
+        )
+
+    def log_batch(self, batch: data.LabeledBatch, step: int, epoch: int) -> None:
+        mlflow.log_dict(
+            {
+                "input_ids": batch.input_ids.tolist(),
+                "decoder_input_ids": batch.decoder_input_ids.tolist(),
+                "target": batch.target.tolist(),
+            },
+            f"batches/epoch_{epoch}_step_{step}.json",
         )
 
 

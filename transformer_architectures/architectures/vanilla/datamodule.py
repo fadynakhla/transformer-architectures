@@ -41,16 +41,11 @@ class TransformerDataModule(distributed.DataModule):
     def setup(self, ctx: distributed.DistributedContext) -> None:
         if ctx.is_head:
             logger.info("Loading dataset on rank 0 node.")
-            full_data = load_data(
-                self.dataset_config.num_samples, self.dataset_config.data_path
+            full_data = load_data_kaggle(
+                self.dataset_config.data_path, self.dataset_config.num_samples
             )
             logger.info("Spliting dataset into train / val / test.")
-            train, val, test = data_utils.train_val_test_split(
-                full_data,
-                self.dataset_config.val_split,
-                self.dataset_config.test_split,
-                self.seed,
-            )
+            train, val, test = full_data
             logger.info(f"Chunking train data into {ctx.world_size} pieces.")
             train_chunks = data_utils.split_into_chunks(train, ctx.world_size)
 
@@ -91,6 +86,8 @@ class TransformerDataModule(distributed.DataModule):
                 collate_fn=self.data_collator,
                 num_workers=num_workers,
                 pin_memory=False,
+                multiprocessing_context="spawn",  # avoid fork+CUDA issues
+                timeout=300,
             )
         logger.info("Creating train dataloader with fixed batch sampling")
         return torchd.DataLoader(
@@ -127,5 +124,25 @@ def load_data(
         data.SourceTarget(source=en, target=fr)
         for en, fr in wmt_en_fr.load_parallel_sentences(
             data_path, num_samples=num_samples
+        )
+    ]
+
+
+def load_data_kaggle(
+    data_path: str, num_samples: int, start_index: int = 0
+) -> tuple[list[data.SourceTarget], list[data.SourceTarget], list[data.SourceTarget]]:
+    train_data = load_stage_kaggle(data_path, "train", start_index, num_samples)
+    val_data = load_stage_kaggle(data_path, "validation", start_index)
+    test_data = load_stage_kaggle(data_path, "test", start_index)
+    return (train_data, val_data, test_data)
+
+
+def load_stage_kaggle(
+    data_path: str, stage: str, start_index, num_samples: int | None = None
+) -> list[data.SourceTarget]:
+    return [
+        data.SourceTarget(source=en, target=fr)
+        for en, fr in wmt_en_fr.load_kaggle_format(
+            data_path, stage, start_index, num_samples
         )
     ]
