@@ -17,4 +17,4 @@ typecheck: # Statically type check code using mypy
 
 .PHONY: ray-submit
 ray-submit: # Submit training job to ray cluster
-	uv run ray job submit --working-dir . -- env TORCH_NCCL_TRACE_BUFFER_SIZE=1000 uv run $(RAY_JOB)
+	uv run ray job submit --working-dir . -- uv run $(RAY_JOB)

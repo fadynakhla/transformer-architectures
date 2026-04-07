@@ -227,6 +227,7 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
                     f"{stage}_loss": avg_loss,
                     f"{stage}_gleu": gleu,
                     f"{stage}_bleu": bleu,
+                    "epoch": epoch,
                 },
                 step=global_step,
             )

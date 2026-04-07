@@ -86,7 +86,6 @@ class TransformerDataModule(distributed.DataModule):
                 collate_fn=self.data_collator,
                 num_workers=num_workers,
                 pin_memory=False,
-                multiprocessing_context="spawn",  # avoid fork+CUDA issues
                 timeout=300,
             )
         logger.info("Creating train dataloader with fixed batch sampling")

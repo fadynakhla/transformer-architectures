@@ -1,9 +1,10 @@
 import multiprocessing
+import os
 import sys
 
 import mlflow
 import ray
-from ray.train import ScalingConfig
+from ray.train import RunConfig, ScalingConfig
 from ray.train.torch import TorchConfig, TorchTrainer
 
 from transformer_architectures import config
@@ -14,6 +15,10 @@ from transformer_architectures.training.base_train_config import MLFlowConfig, R
 
 CONFIG_PATH = "configs/vanilla_large_distributed.yaml"
 
+NCCL_ENV_VARS = {
+    "TORCH_FR_BUFFER_SIZE": "1000",
+}
+
 
 def main() -> None:
     config_path = sys.argv[1] if len(sys.argv) > 1 else CONFIG_PATH
@@ -23,7 +28,7 @@ def main() -> None:
     mlflow_config = config.load_config(
         config_path, section="MLFlow", model_class=MLFlowConfig
     )
-    ray.init()
+    ray.init(runtime_env={"env_vars": NCCL_ENV_VARS})
     mlflow.set_tracking_uri(mlflow_config.tracking_uri)
     mlflow.set_experiment(mlflow_config.experiment_name)
     with mlflow.start_run() as run:
