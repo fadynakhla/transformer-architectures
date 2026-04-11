@@ -1,3 +1,5 @@
+import logging
+import pathlib
 import socket
 from typing import Any, ContextManager, Generic, Literal, Protocol, TypeVar
 import abc
@@ -104,7 +106,9 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
 
         dataloader = data_module.train_dataloader()
         total_batches = len(dataloader)
+        logger.info(f"rank={distributed_ctx.world_rank} epoch={epoch}. Local total batches: {total_batches}")
         total_batches = synchronize_int_min(total_batches, distributed_ctx)
+        logger.info(f"rank={distributed_ctx.world_rank} epoch={epoch}. Syncronized total batches: {total_batches}")
 
         total_groups, final_acc_steps = divmod(total_batches, grad_accumulation_steps)
         if final_acc_steps:
@@ -112,21 +116,31 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         else:
             final_acc_steps = grad_accumulation_steps
 
-        accumulated_loss = 0.0
+        accumulated_loss = torch.zeros((), device=distributed_ctx.device)
 
-        progress_bar: tqdm.tqdm | None = None
-        if distributed_ctx.is_head:
-            progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
-        for i, batch in enumerate(dataloader):
-            if i == 0 and distributed_ctx.is_head:
-                self.log_batch(batch, global_step, epoch)
-            if i >= total_batches:
-                break
-            batch.to(distributed_ctx.device)
-
+        # progress_bar: tqdm.tqdm | None = None
+        # if distributed_ctx.is_head:
+        #     progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
+        it = iter(dataloader)
+        i = 0
+        debug_logger = get_train_debug_logger(distributed_ctx.world_rank)
+        # for i, batch in enumerate(dataloader):
+            # if i == 0 and distributed_ctx.is_head:
+            #     self.log_batch(batch, global_step, epoch)
+            # if i >= total_batches:
+            #     logger.info(f"rank={distributed_ctx.world_rank}. Reached max batches: {total_batches}. Breaking.")
+            #     break
+        while i < total_batches:
             is_grad_acc_step = (i + 1) % grad_accumulation_steps == 0
             is_final_step = i == total_batches - 1
             is_update_step = is_grad_acc_step or is_final_step
+
+            debug_logger.info(f"epoch={epoch} step={global_step} batch={i} sync={is_update_step}")
+
+            debug_logger.info(f"epoch={epoch} step={global_step} batch={i} before_next_batch")
+            batch = next(it)
+            debug_logger.info(f"epoch={epoch} step={global_step} batch={i} after_next_batch")
+            batch.to(distributed_ctx.device)
 
             sync_context = (
                 contextlib.nullcontext()
@@ -135,37 +149,48 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                 else model.no_sync()
             )
             with sync_context:
+                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} before_train_step")
                 loss = self.train_step(model, batch, criterion, autocast_ctx)
+                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} after_train_step")
                 acc_norm = final_acc_steps if is_final_step else grad_accumulation_steps
                 loss /= acc_norm
+                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} before_backward")
                 loss.backward()
-                accumulated_loss += loss.detach().item()
+                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} after_backward")
+                accumulated_loss += loss.detach()
 
             if is_update_step:
+                accumulated_loss_val = accumulated_loss.item()
+                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} before_optimizer")
                 optimizer.step()
+                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} after_optimizer")
                 scheduler.step()
-                if progress_bar is not None:
-                    progress_bar.set_postfix({"loss": accumulated_loss}, refresh=False)
-                    progress_bar.update(1)
+                # if progress_bar is not None:
+                #     progress_bar.set_postfix({"loss": accumulated_loss_val}, refresh=False)
+                #     progress_bar.update(1)
 
+                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} before_post_update_block")
                 is_log_step = global_step % log_interval == 0
                 if distributed_ctx.is_head and (is_log_step or is_final_step):
                     lr = float(scheduler.get_last_lr()[0])
                     log_train_metrics(
                         model=model,
-                        loss=accumulated_loss,
+                        loss=accumulated_loss_val,
                         lr=lr,
                         epoch=epoch,
                         epoch_frac=epoch + (i / total_batches),
                         step=global_step,
                         log_distributions=log_grad_distributions,
                     )
+                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} after_post_update_block")
 
-                accumulated_loss = 0.0
+                accumulated_loss.zero_()
                 global_step += 1
                 optimizer.zero_grad()
-        if progress_bar is not None:
-            progress_bar.close()
+            i += 1
+        # if progress_bar is not None:
+        #     progress_bar.close()
+        debug_logger.info(f"epoch={epoch} epoch_complete")
         return global_step
 
     def distributed_train_loop(self) -> None:
@@ -319,3 +344,24 @@ def synchronize_int_min(val_to_sync: int, distributed_ctx: context.DistributedCo
         torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.MIN)
         val_to_sync = int(t.item())
     return val_to_sync
+
+
+def get_train_debug_logger(rank: int) -> logging.Logger:
+    logger_name = f"train_debug_rank{rank}"
+    logger = logging.getLogger(logger_name)
+
+    if logger.handlers:
+        return logger
+
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    path = pathlib.Path(f"/tmp/train_rank{rank}.log")
+    handler = logging.FileHandler(path, mode="a")
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(message)s")
+    )
+
+    logger.addHandler(handler)
+    return logger
