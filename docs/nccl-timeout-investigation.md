@@ -618,13 +618,84 @@ on the same pair of nodes, no PyTorch. If this also eventually stalls, we
 have a pure NCCL / network reproducer to hand to NVIDIA. If it runs
 indefinitely, the problem needs PyTorch / DDP in the loop.
 
-### 7.4 Persistent flight-recorder dump to shared storage
+### 7.4 OSU microbenchmarks — RDMA path without NCCL
+
+Sits one layer below §7.3: OSU uses MPI over UCX/libibverbs, so it
+exercises the exact same mlx5 driver and ConnectX-7 firmware that
+NCCL's IB plugin goes through, but without any NCCL code on the hot
+path. Combined with §7.3 this gives a clean isolation ladder:
+
+| Test                  | NCCL | MPI/UCX | RDMA/mlx5 | PyTorch |
+|-----------------------|:----:|:-------:|:---------:|:-------:|
+| full training (§4)    |  ✓   |         |     ✓     |    ✓    |
+| gloo backend (§7.2)   |      |         |           |    ✓    |
+| `nccl-tests` (§7.3)   |  ✓   |         |     ✓     |         |
+| OSU / perftest (§7.4) |      |    ✓    |     ✓     |         |
+
+Build (aarch64, DGX Spark):
+
+```bash
+# Prerequisite: an MPI with UCX. openmpi is fine; whatever ships with
+# the system is easiest. Verify UCX is wired in:
+ompi_info | grep -i ucx          # should list btl / pml ucx components
+
+# Grab OSU and build against that MPI:
+wget https://mvapich.cse.ohio-state.edu/download/mvapich/osu-micro-benchmarks-7.5.tar.gz
+tar xf osu-micro-benchmarks-7.5.tar.gz
+cd osu-micro-benchmarks-7.5
+./configure CC=mpicc CXX=mpicxx --prefix=$PWD/install
+make -j && make install
+```
+
+Two shapes of run to soak the driver path:
+
+1. **Point-to-point bandwidth / latency** — the most direct RDMA
+   stress test. If this stalls, the problem is below NCCL.
+   ```bash
+   mpirun -H host0,host1 -np 2 \
+     -x UCX_NET_DEVICES=rocep1s0f1:1 \
+     -x UCX_TLS=rc,ud,self \
+     install/libexec/osu-micro-benchmarks/mpi/pt2pt/osu_bw -i 100000 -x 1000
+   mpirun ... install/libexec/osu-micro-benchmarks/mpi/pt2pt/osu_latency -i 1000000
+   ```
+2. **Allreduce** — closer in shape to what training does, still no
+   NCCL. Run with the same message sizes PyTorch's DDP is issuing
+   (§4 run_5 stalled at `NumelIn=7351296` bf16 ≈ 14.7 MB):
+   ```bash
+   mpirun ... install/libexec/osu-micro-benchmarks/mpi/collective/osu_allreduce \
+     -m 1048576:67108864 -i 100000 -x 1000
+   ```
+
+The iteration counts are deliberately high — the training stall
+takes 20–30 h and ~1 M collectives to manifest, so a 30 s
+microbenchmark run that passes tells us nothing. Plan on leaving
+these running overnight at minimum, under the §8 hang watcher (set
+`LOG_FILE` to wherever the benchmark's stdout lands).
+
+Interpretation:
+
+- **OSU stalls**: the bug is at or below the mlx5/verbs layer. Hand
+  the reproducer + NIC counters + firmware version to Mellanox /
+  NVIDIA networking. The PyTorch/NCCL side is just a victim.
+- **OSU runs clean, `nccl-tests` stalls**: bug lives inside NCCL's
+  use of the verbs layer (proxy scheduling, op pool, completion
+  handling) — hypothesis §6.2 (2), (3), or (4).
+- **OSU clean, `nccl-tests` clean, training hangs**: bug is in how
+  PyTorch DDP drives NCCL (bucket sequencing, stream coupling,
+  backpressure from the compute stream) rather than NCCL itself.
+
+A bonus rung below OSU is the perftest suite (`ib_write_bw`,
+`ib_send_bw`) which skips MPI entirely and pokes libibverbs
+directly — worth running if OSU also looks suspicious and we want
+to rule MPI/UCX out as a confounder.
+
+### 7.5 Persistent flight-recorder dump to shared storage
 
 Already set via `TORCH_NCCL_DEBUG_INFO_TEMP_FILE=/data/nccl_dumps/nccl_trace_rank_`
 (NFS-shared, reboot-safe). The *next* crash under this config should drop
 per-rank JSON dumps with the last ~20 K collectives' metadata.
 
-### 7.5 Live hang watcher (see §8) — highest priority
+### 7.6 Live hang watcher (see §8) — highest priority
 
 Auto-capture py-spy + gdb state when the training log goes stale. Now
 that we know the stall is inside NCCL and specifically inside
@@ -646,7 +717,7 @@ layer stall over an NCCL-internal bug.
 A `gdb -batch -ex 'thread apply all bt full'` capture is strictly
 more informative than py-spy for this — take both.
 
-### 7.6 Upstream bug search / report
+### 7.7 Upstream bug search / report
 
 - Collect run 4 artifacts (log, crash stack, NCCL version, topology) and
   cross-check against the NVIDIA DGX Spark / GB10 forum threads below.
@@ -695,23 +766,46 @@ design:
 
 ### 8.1 Preflights
 
-Before starting the watcher, verify:
+The watcher is designed to be launched as root (`sudo bash
+/data/hang-watcher.sh`) rather than relying on passwordless sudo for
+individual tools. Before starting it, verify:
 
 ```bash
-# Must be 0 for py-spy and gdb -p to attach without CAP_SYS_PTRACE.
+# Must be 0 for py-spy and gdb -p to attach (even for root, depending
+# on kernel config — safer to just set it).
 cat /proc/sys/kernel/yama/ptrace_scope
-# If not 0:
-sudo sysctl -w kernel.yama.ptrace_scope=0
+sudo sysctl -w kernel.yama.ptrace_scope=0   # if not 0
 
-# Tools present:
-which py-spy gdb gcore
+# gdb / gcore present on PATH:
+which gdb gcore
 
-# Passwordless sudo for gdb/py-spy/gcore (or run the watcher under sudo):
-sudo -n true && echo ok
+# py-spy is NOT on PATH on these nodes — it lives in the ray-server
+# uv venv. Point PY_SPY at the venv binary directly (NOT via `uv run`,
+# which breaks under sudo because PATH gets scrubbed):
+PY_SPY=/home/fadynakhla/ray-server/.venv/bin/py-spy
+"$PY_SPY" --version
 
 # Dump dir exists and is writable:
-mkdir -p /data/coredumps && touch /data/coredumps/.writable && rm /data/coredumps/.writable
+sudo mkdir -p /data/coredumps
 ```
+
+Launch under sudo inside a tmux so it survives disconnects. The script
+takes the rank it should watch as a positional arg — run it on each
+node with the corresponding rank:
+
+```bash
+# on host 0 (rank 0)
+tmux new -s hang-watcher
+sudo bash /data/hang-watcher.sh 0
+# C-b d to detach
+
+# on host 1 (rank 1)
+tmux new -s hang-watcher
+sudo bash /data/hang-watcher.sh 1
+```
+
+Each invocation writes its artifacts under `/data/coredumps/rank${RANK}/`
+so the two nodes don't clobber each other's `watcher.log`.
 
 ### 8.2 Watcher script
 
@@ -721,43 +815,69 @@ tmux before starting the training job:
 ```bash
 #!/usr/bin/env bash
 # hang-watcher.sh — run in a tmux on each node.
+# Usage: sudo bash hang-watcher.sh <rank>
 # Alerts when the per-rank diagnostic log hasn't been written to for
 # STALL_SECONDS, unless the last line marks epoch completion (in which
 # case rank 0 is running eval and rank 1 is legitimately idle).
 set -u
 
-DUMP_DIR=${DUMP_DIR:-/data/coredumps}
+if [[ $# -lt 1 || ! "$1" =~ ^[0-9]+$ ]]; then
+  echo "Usage: sudo bash $0 <rank>"
+  exit 1
+fi
+RANK=$1
+
+DUMP_ROOT=${DUMP_ROOT:-/data/coredumps}
+DUMP_DIR=${DUMP_DIR:-${DUMP_ROOT}/rank${RANK}}
 STALL_SECONDS=${STALL_SECONDS:-300}    # 5 min
 POLL_SECONDS=${POLL_SECONDS:-30}
-LOG_GLOB=${LOG_GLOB:-/tmp/train_rank*.log}
+HEARTBEAT_SECONDS=${HEARTBEAT_SECONDS:-1200}   # 20 min
+LOG_FILE=${LOG_FILE:-/tmp/train_rank${RANK}.log}
 EPOCH_DONE_MARKER=${EPOCH_DONE_MARKER:-epoch_complete}
 SECOND_SAMPLE_DELAY=${SECOND_SAMPLE_DELAY:-5}
+# Absolute path to py-spy. On these nodes it lives in the ray-server uv venv
+# rather than on PATH, so point directly at the venv binary (avoids
+# `uv run` under sudo, which breaks because sudo scrubs PATH).
+PY_SPY=${PY_SPY:-/home/fadynakhla/ray-server/.venv/bin/py-spy}
 
 mkdir -p "$DUMP_DIR"
 
 # Preflight — fail loud if we can't actually attach when we need to.
-ptrace_scope=$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "?")
-if [[ "$ptrace_scope" != "0" ]]; then
-  echo "WARNING: yama ptrace_scope=$ptrace_scope — py-spy/gdb attach will likely fail."
-  echo "  Fix with: sudo sysctl -w kernel.yama.ptrace_scope=0"
+if [[ $EUID -ne 0 ]]; then
+  echo "ERROR: watcher must be run as root (e.g. 'sudo bash $0') — capture steps need CAP_SYS_PTRACE"
+  exit 1
 fi
-command -v py-spy >/dev/null || { echo "ERROR: py-spy not installed"; exit 1; }
+# Yama ptrace_scope: root has CAP_SYS_PTRACE, which bypasses scopes 0-2.
+# Only scope=3 blocks root, so that's the only value we need to guard on.
+ptrace_scope=$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "?")
+if [[ "$ptrace_scope" == "3" ]]; then
+  echo "ERROR: yama ptrace_scope=3 blocks ptrace even for root — py-spy/gdb will fail."
+  echo "  Fix with: sysctl -w kernel.yama.ptrace_scope=1"
+  exit 1
+fi
+"$PY_SPY" --version >/dev/null 2>&1 || { echo "ERROR: py-spy not runnable at $PY_SPY"; exit 1; }
 command -v gdb    >/dev/null || { echo "ERROR: gdb not installed"; exit 1; }
 command -v gcore  >/dev/null || echo "WARNING: gcore not installed — will skip core file capture"
-sudo -n true 2>/dev/null || echo "WARNING: passwordless sudo not available — captures may prompt"
 
-declare -A seen_mtime stale_since captured
+# Timestamped log helper — writes to stdout (visible in tmux) and watcher.log.
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$DUMP_DIR/watcher.log"
+}
+
+seen_mtime=0
+stale_since=0
+captured=0
 
 capture_one() {
   local pid=$1 tag=$2 out_base=$3
   local out="${out_base}-pid${pid}-${tag}"
-  # Python-side thread dump via faulthandler/SIGUSR1 (no sudo needed;
-  # only useful if faulthandler is registered in the training entrypoint).
+  # Python-side thread dump via faulthandler/SIGUSR1 (free; only useful
+  # if faulthandler is registered in the training entrypoint).
   kill -USR1 "$pid" 2>/dev/null || true
   # Python + native C/C++ frames together — the key sample for an NCCL hang.
-  sudo py-spy dump --native --pid "$pid" > "${out}.pyspy-native.txt" 2>&1 || true
+  "$PY_SPY" dump --native --pid "$pid" > "${out}.pyspy-native.txt" 2>&1 || true
   # Pure native stacks, all threads (proxy, watchdog, autograd workers).
-  sudo gdb -p "$pid" -batch \
+  gdb -p "$pid" -batch \
     -ex "set pagination off" \
     -ex "info threads" \
     -ex "thread apply all bt" \
@@ -768,7 +888,7 @@ capture_one() {
   {
     echo '# /proc/'"$pid"'/status'; cat /proc/$pid/status 2>/dev/null
     echo '# /proc/'"$pid"'/syscall'; cat /proc/$pid/syscall 2>/dev/null
-    echo '# /proc/'"$pid"'/stack'; sudo cat /proc/$pid/stack 2>/dev/null
+    echo '# /proc/'"$pid"'/stack'; cat /proc/$pid/stack 2>/dev/null
   } > "${out}.proc.txt" 2>&1 || true
 }
 
@@ -778,7 +898,8 @@ capture() {
   ts=$(date +%Y%m%d-%H%M%S)
   host=$(hostname)
   out_base="$DUMP_DIR/hang-${host}-${ts}"
-  echo "[$(date)] HANG on $host: $reason" | tee -a "$DUMP_DIR/watcher.log"
+  log "HANG on $host: $reason"
+  log "capture: writing artifacts to ${out_base}.*"
 
   nvidia-smi > "${out_base}.nvidia-smi.txt" 2>&1 || true
   ip -s link > "${out_base}.iplink.txt" 2>&1 || true
@@ -787,64 +908,97 @@ capture() {
     ethtool -S "$nic" 2>/dev/null | grep -v ': 0$' \
       > "${out_base}.ethtool-${nic}.txt" 2>&1 || true
   done
-  cp /tmp/train_rank*.log "$DUMP_DIR/" 2>/dev/null || true
+  cp "$LOG_FILE" "$DUMP_DIR/" 2>/dev/null || true
 
   local pids
   pids=$(pgrep -f RayTrainWorker)
-  [[ -z "$pids" ]] && return
+  if [[ -z "$pids" ]]; then
+    log "capture: no RayTrainWorker pids found, skipping stack traces"
+    return
+  fi
 
-  # First sample.
+  log "capture: attempting stack traces (sample 1) for pids: $(echo $pids | tr '\n' ' ')"
   for pid in $pids; do capture_one "$pid" sample1 "$out_base"; done
-  # Short wait, then second sample. Same frames = confirmed stuck.
+  log "capture: sleeping ${SECOND_SAMPLE_DELAY}s before second sample"
   sleep "$SECOND_SAMPLE_DELAY"
+  log "capture: attempting stack traces (sample 2)"
   for pid in $pids; do capture_one "$pid" sample2 "$out_base"; done
 
   # Offline-analyzable core files — one per worker, once per capture.
   if command -v gcore >/dev/null; then
+    log "capture: dumping core files with gcore"
     for pid in $pids; do
-      sudo gcore -o "${out_base}-core" "$pid" > "${out_base}-pid${pid}-gcore.log" 2>&1 || true
+      gcore -o "${out_base}-core" "$pid" > "${out_base}-pid${pid}-gcore.log" 2>&1 || true
     done
   fi
+  log "capture: done"
 }
+
+log "watcher starting on $(hostname) for rank ${RANK}: poll=${POLL_SECONDS}s stall=${STALL_SECONDS}s heartbeat=${HEARTBEAT_SECONDS}s log_file=${LOG_FILE} dump_dir=${DUMP_DIR}"
+last_heartbeat=$(date +%s)
+workers_were_up=0
 
 while true; do
   if ! pgrep -f RayTrainWorker >/dev/null; then
-    seen_mtime=(); stale_since=(); captured=()
+    if [[ "$workers_were_up" -eq 1 ]]; then
+      log "no RayTrainWorker processes running — resetting state"
+      workers_were_up=0
+    fi
+    seen_mtime=0; stale_since=0; captured=0
     sleep "$POLL_SECONDS"; continue
+  fi
+  if [[ "$workers_were_up" -eq 0 ]]; then
+    log "RayTrainWorker processes detected on $(hostname)"
+    workers_were_up=1
   fi
 
   now=$(date +%s)
-  for f in $LOG_GLOB; do
-    [[ -f "$f" ]] || continue
-    mtime=$(stat -c %Y "$f")
-    prev=${seen_mtime[$f]:-0}
 
-    if [[ "$mtime" -ne "$prev" ]]; then
-      seen_mtime[$f]=$mtime
-      stale_since[$f]=0
-      captured[$f]=0
-      continue
-    fi
+  if [[ ! -f "$LOG_FILE" ]]; then
+    # Training might not have opened the log yet; just wait.
+    sleep "$POLL_SECONDS"; continue
+  fi
 
-    start=${stale_since[$f]:-0}
-    if [[ "$start" -eq 0 ]]; then
-      stale_since[$f]=$now
-      continue
-    fi
-    if (( now - start < STALL_SECONDS )); then
-      continue
-    fi
-
-    last_line=$(tail -n 1 "$f" 2>/dev/null || echo "")
+  # Periodic heartbeat for this rank's log file.
+  if (( now - last_heartbeat >= HEARTBEAT_SECONDS )); then
+    last_line=$(tail -n 1 "$LOG_FILE" 2>/dev/null || echo "")
+    mtime=$(stat -c %Y "$LOG_FILE" 2>/dev/null || echo 0)
+    age=$(( now - mtime ))
     if [[ "$last_line" == *"$EPOCH_DONE_MARKER"* ]]; then
-      continue
+      log "heartbeat: eval appears to be in progress (last write ${age}s ago). most recent log: $last_line"
+    elif (( age >= 60 )); then
+      log "heartbeat: log has been stale for ${age}s (capture fires at ${STALL_SECONDS}s). most recent log: $last_line"
+    else
+      log "heartbeat: training appears to be healthy (last write ${age}s ago). most recent log: $last_line"
     fi
+    last_heartbeat=$now
+  fi
 
-    if [[ "${captured[$f]:-0}" -eq 0 ]]; then
-      capture "$f stale ${STALL_SECONDS}s, last line: $last_line"
-      captured[$f]=1
-    fi
-  done
+  mtime=$(stat -c %Y "$LOG_FILE")
+  if [[ "$mtime" -ne "$seen_mtime" ]]; then
+    seen_mtime=$mtime
+    stale_since=0
+    captured=0
+    sleep "$POLL_SECONDS"; continue
+  fi
+
+  if [[ "$stale_since" -eq 0 ]]; then
+    stale_since=$now
+    sleep "$POLL_SECONDS"; continue
+  fi
+  if (( now - stale_since < STALL_SECONDS )); then
+    sleep "$POLL_SECONDS"; continue
+  fi
+
+  last_line=$(tail -n 1 "$LOG_FILE" 2>/dev/null || echo "")
+  if [[ "$last_line" == *"$EPOCH_DONE_MARKER"* ]]; then
+    sleep "$POLL_SECONDS"; continue
+  fi
+
+  if [[ "$captured" -eq 0 ]]; then
+    capture "$LOG_FILE stale ${STALL_SECONDS}s, last line: $last_line"
+    captured=1
+  fi
   sleep "$POLL_SECONDS"
 done
 ```

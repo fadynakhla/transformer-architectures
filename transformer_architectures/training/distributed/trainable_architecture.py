@@ -1,6 +1,9 @@
+import faulthandler
 import logging
 import pathlib
+import signal
 import socket
+import sys
 from typing import Any, ContextManager, Generic, Literal, Protocol, TypeVar
 import abc
 import contextlib
@@ -194,6 +197,8 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         return global_step
 
     def distributed_train_loop(self) -> None:
+        faulthandler.enable(file=sys.stderr, all_threads=True)
+        faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
         distributed_ctx = context.DistributedContext.from_ray_context()
         self.mlflow_setup(distributed_ctx)
         with mlflow.start_run(run_id=self.mlflow_run_id):
