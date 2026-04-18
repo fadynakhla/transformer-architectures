@@ -1,0 +1,19 @@
+Repro:
+  hidden_dim: 1024
+  num_blocks: 16
+  batch_size: 8
+  seq_len: 4096
+
+  steps: 10000000
+  grad_accum_steps: 4
+  lr: 1.0e-4
+  dtype: bf16
+  bucket_cap_mb: 25
+
+  log_every: 1000
+  tick_every_s: 30.0
+  verbose_step_trace: false
+
+  inject_rank: -1
+  inject_step: -1
+  inject_sleep_ms: 0

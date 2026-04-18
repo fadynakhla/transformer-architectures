@@ -77,3 +77,19 @@ Saved to `/data/trained/<model_name>/<run_name>_<run_id[:6]>/epoch_<n>.pt` via `
 
 - WMT EN-FR: `/data/datasets/wmt/en-fr`
 - ViT training data: configured in `configs/vision_large.yaml`
+
+## Research and Debugging with MCP Servers
+
+When asked about technical details — especially complex bugs, package behavior, library APIs, or framework internals — **always use the available MCP servers** to gather up-to-date information before responding:
+
+- **context7** (`mcp__context7`): Use as the first choice for any question about a library, framework, SDK, API, or CLI tool (e.g., PyTorch, NCCL, CUDA, tokenizers, MLflow). Resolve the library ID first with `resolve-library-id`, then fetch docs with `query-docs`. Prefer this over web search for library documentation.
+- **searxng** (`mcp__searxng`): Use `searxng_web_search` for broader technical searches — bug reports, GitHub issues, Stack Overflow threads, release notes, and known issues. Use `web_url_read` to read specific pages found in search results.
+- **fetch** (`mcp__fetch`): Use to retrieve content from specific URLs — documentation pages, GitHub issues, or any known link. Choose the appropriate format (`fetch_markdown`, `fetch_readable`, `fetch_txt`, etc.) based on the source.
+- **arxiv** (`mcp__arxiv-mcp-server`): Use for anything involving academic papers, research references, or understanding the theory behind architectures and techniques implemented in this repo. Key workflows:
+  - **Finding papers**: Use `search_papers` to find papers by keyword (e.g., "vision transformer", "layer normalization", "BERT pre-training"). Use `semantic_search` for more nuanced queries when keyword search isn't sufficient.
+  - **Reading papers**: Use `get_abstract` for a quick summary, `download_paper` to fetch the full PDF, and `read_paper` to read the content of a downloaded paper.
+  - **Exploring related work**: Use `citation_graph` to find papers that cite or are cited by a given paper — useful for understanding how a technique evolved.
+  - **Tracking topics**: Use `watch_topic` to set up alerts for new papers on a topic, and `check_alerts` to review them. Use `list_papers` to see all downloaded/indexed papers, and `reindex` if the index needs refreshing.
+  - **When to use**: Any time the conversation involves understanding a paper's methodology before implementing it, verifying architectural details (e.g., "does the original ViT paper use class tokens or global average pooling?"), finding the source paper for a technique, or exploring recent advances relevant to architectures in this repo.
+
+**When to use them**: Any time the question involves package versions, error messages, NCCL/distributed training issues, CUDA compatibility, academic papers, architectural design decisions from research, or any behavior that may have changed since training data cutoff. Do not rely solely on training knowledge for these topics — verify with live sources.

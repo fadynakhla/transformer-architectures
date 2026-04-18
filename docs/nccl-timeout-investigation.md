@@ -19,9 +19,14 @@ shape:
 - Ray Train then tears the worker group down with
   `SYSTEM_ERROR ... connection error code 2. End of file.`
 
-Runs succeed from a few hundred thousand to nearly two million collectives
-before failing, so the failure is not tied to a specific iteration count or
-elapsed time.
+Runs succeed from a few hundred thousand to over four million
+collectives (20 h to 5.67 days) before failing, so the failure is not
+tied to a specific iteration count or elapsed time. Run 6's live
+stack capture (§3.4) identified the stuck state as a producer/consumer
+disagreement between NCCL 2.28's proxy progress thread and the
+autograd thread over the op pool's free list — strongly pointing at
+an NCCL-internal synchronization bug on aarch64's weakly-ordered
+memory model rather than an mlx5/NIC issue.
 
 ## 2. Environment
 
@@ -359,17 +364,251 @@ Rank 0 entered the same backward at 06:39:16.425 and never reached
 `after_backward` — its autograd thread was parked inside
 `pncclAllReduce` for the full window.
 
+### run_6 — full NCCL debug, single HCA, hang watcher + faulthandler active (**failed with same signature**)
+
+| | |
+|---|---|
+| Driver log | `logs/p_core_failed_run.txt` |
+| Watcher artifacts | `/data/coredumps/rank0/`, `/data/coredumps/rank1/` |
+| Rank 0 host | 192.168.200.13 (`aitopatom-0512`), pid 91971 |
+| Rank 1 host | 192.168.200.12 (`aitopatom-09a5`), pid 589092 |
+| Started | 2026-04-11 17:47 |
+| First stall | 2026-04-17 09:48:12 (both ranks' debug logs freeze at `step=180193 batch=152807`) |
+| Watchdog fires | 2026-04-17 10:18:12 (rank 0, +30 min from stall, canonical) |
+| Crash | 2026-04-17 10:19:21 (rank 1 SIGSEGV on cpu 19) |
+| Runtime | ~5.67 days (~136 h) — **2.5× the next-longest run (run 0 at 2.2 d)** |
+| Stalled collective | `SeqNum=4324646`, `NumelIn=8395776` (bf16 ≈ 16 MB), `OpType=ALLREDUCE` |
+| Rank 0 state at watchdog | `last_enqueued 4324668 / last_completed 4324645` — gap 23, one DDP backward's buckets |
+| Rank 1 state at dump | `last_enqueued == last_completed == 4324645` — autograd thread inside `pncclAllReduce` for 4324646 (same pattern as all prior) |
+| Desync debug | `[1] finished collective #4324645, but didn't join collective #4324646` |
+| SIGSEGV lands on | rank 1 (192.168.200.12) — same host as run 4's stuck rank |
+| NET | `Using [0]rocep1s0f1:1/RoCE [RO]; OOB enp1s0f1np1:192.168.200.13<0>` (single HCA, QSFP56 bootstrap) |
+| Proxy Progress core | **core 7 on both ranks (P-core)** — see §6.3 |
+| New diagnostics active | hang watcher (§8), `faulthandler` (§8.3), flight recorder, `TORCH_NCCL_DESYNC_DEBUG=1` |
+
+**Run 6 falsifies the strong form of the E-core hypothesis** (§6.3): both
+ranks' Proxy Progress threads were on P-core 7 and the run still failed
+with the canonical signature. It does **not** fully rule out the weak
+form — the run lasted 2.5× longer than any prior run, which is
+consistent with E-core placement *increasing* hang probability without
+being necessary. But the hang can clearly occur with the proxy thread
+on a P-core.
+
+**The watcher captured the hang live** — the first dataset we have with
+stack state from *inside* the 30-minute stall window, rather than
+reconstructed from post-watchdog crash artifacts. See §3.4. The
+flight recorder dumps from run 6 are in `/data/nccl_dumps/nccl_trace_rank_{0,1}`
+and add corroborating FR-level evidence. See §3.5.
+
+### 3.4 Live stack snapshot (run 6) — the proxy thread is asleep, not in mlx5
+
+The hang watcher fired at 09:53:56 / 09:54:04 (≈5 min into the stall,
+24 min before the peer's NCCL watchdog) and captured `gdb thread apply
+all bt` on both ranks' main training processes. Previously all stack
+data was post-mortem from the SIGSEGV; this is the first look at the
+steady state.
+
+**Stuck rank (rank 1, pid 589092):**
+
+| Thread | State | Stack head |
+|---|---|---|
+| autograd engine | **R, 99.9% CPU** | `ncclLocalOpAppend (proxy.cc:499) → SaveProxy → uploadProxyOps → hostStreamPlanTask → ncclLaunchKernelAfter_NoCuda → groupLaunch → ncclGroupEndInternal → ncclEnqueueCheck → ncclAllReduce → Reducer::autograd_hook` |
+| **NCCL Proxy Progress** (`pt_nccl_progrss`) | **S, 0% CPU** | `pthread_cond_wait ← ncclProxyGetPostedOps (proxy.cc:797) ← ncclProxyProgress (proxy.cc:979)` |
+| NCCL Proxy Service | S, 0% CPU | `poll(nfds=74)` at `proxy.cc:1645` — idle |
+| NCCL Proxy Service UDS | S, 0% CPU | `poll(nfds=1, timeout=500)` at `proxy.cc:1817` — idle |
+| NCCL Watchdog | S | `__futex_abstimed_wait_common64` — waiting on timeout |
+
+**Peer rank (rank 0, pid 91971):**
+
+| Thread | State | Stack head |
+|---|---|---|
+| autograd engine | R, 90.9% CPU | (main thread in `cudaStreamSynchronize` via `.item()`, same as §6.0) |
+| **NCCL Proxy Progress** (`pt_nccl_progrss`) | **R, 90.9% CPU** | `sched_yield() ← ncclProxyProgress (proxy.cc:986)` |
+| NCCL Proxy Service | S | `poll(nfds=74)` — idle |
+| NCCL Proxy Service UDS | S | `poll(nfds=1, timeout=500)` — idle |
+
+Both ranks' gdb captures were taken twice, 5 s apart (watcher's
+two-sample discipline; see §8 item 3). All NCCL / autograd / CUDA
+frames listed above are **byte-for-byte identical across sample 1 and
+sample 2** — same instruction addresses in `ncclLocalOpAppend`,
+`ncclProxyGetPostedOps`, `ncclProxyProgress`, and the
+`cudaStreamSynchronize` wait. The only inter-sample drift is in
+unrelated idle Ray gRPC / timer threads whose epoll/condvar timeouts
+rotated by ~5 s. The threads of interest are genuinely stuck, not
+briefly slow.
+
+**This is decisive.** The stuck rank's NCCL Proxy Progress thread is
+**sleeping on a condition variable waiting for new posted ops** — it
+is not in `ibv_poll_cq`, not in any mlx5 code path, not blocked on a
+syscall related to the NIC. Its view of the world is "I have no work
+to do."
+
+At the same time, the stuck rank's autograd thread is at **100% CPU
+inside `ncclLocalOpAppend`** — the slow-path free-list spin. Its
+view of the world is "no slot is available; the proxy thread must
+drain one before I can proceed."
+
+The two views are inconsistent. Either:
+
+- the proxy thread *did* free a slot but the autograd thread can't see
+  the update (a memory-ordering / publication bug — plausible on
+  aarch64's weakly-ordered memory model, which relies on explicit
+  barriers that a subtle NCCL 2.28 regression could be missing); or
+- the autograd thread posted ops that the proxy thread never observed
+  (the reverse direction of the same bug); or
+- the free list genuinely is empty but the proxy thread has already
+  drained and released everything it could — which still leaves the
+  autograd thread permanently stuck because nothing will ever refill
+  the slot it wants.
+
+The peer rank's proxy thread, in contrast, is actively spinning in
+the progress loop at `proxy.cc:986` — NCCL's code path for "I have
+ops scheduled but none can advance right now." That is consistent
+with rank 0 having queued its 15 bucket allreduces for batch 152807
+and waiting for the peer's data, which never arrives (because rank 1
+is stuck mid-append and hasn't signaled its proxy thread to post).
+
+**What this rules out and rules in, relative to §6.2:**
+
+- **Ruled out: §6.2 (1) "mlx5 driver stall on ibv_poll_cq."** Neither
+  rank's proxy thread is in `ibv_poll_cq` or any verbs/driver call.
+  The NIC is not the stuck component.
+- **Ruled out: §6.2 (5) "RoCE back-pressure / PFC buildup."** Same
+  reason; also, `ethtool -S` at hang time shows `rx_corrected_bits_phy
+  = 9081` over 5.67 days = ~2e-14 pre-FEC BER, post-FEC zero errors,
+  plus ~7k pause frames in each direction which is trivial relative
+  to ~336 B packets exchanged.
+- **Ruled out (weak form): §6.3 "E-core placement causes hangs."**
+  Proxy Progress was on P-core 7 both sides. P-core placement
+  extended the MTTF from ~30 h to ~136 h but did not prevent the
+  hang.
+- **Strongly supported: §6.2 (2) "NCCL 2.28 proxy progress thread bug
+  on aarch64 / Blackwell."** The stuck state is exactly a
+  producer/consumer synchronization inconsistency between the
+  autograd thread and the proxy progress thread. The canonical way
+  this kind of bug manifests only under long soak is when a
+  memory-ordering bug has a rare trigger window (e.g., a missing
+  `std::atomic` release/acquire on aarch64 that works by accident on
+  x86's stronger ordering).
+- **Also possible: §6.2 (3) "host-staging buffer back-pressure
+  deadlock."** The specific symptom — free list empty, proxy thread
+  idle — could arise from the proxy thread thinking a slot is in
+  flight when it isn't. Less elegant than (2) but not excluded.
+- **§6.2 (4) "transient proxy error + broken recovery"** is not
+  supported: there is no NCCL error line in the driver log before
+  the watchdog fires, which would be expected if a proxy op had
+  errored and triggered a recovery path.
+
+### 3.5 Flight recorder dump (run 6) — confirms the asymmetry
+
+The run 6 FR dumps (`/data/nccl_dumps/nccl_trace_rank_{0,1}`, ~3.2 MB
+each, 20,000 entries per rank, pickle format) were written by the
+watchdog at 10:18:13 and are independent of the watcher captures.
+They corroborate every aspect of §3.4 at the FR level.
+
+**`pg_status` at dump time:**
+
+| | rank 0 (peer) | rank 1 (stuck) |
+|---|---|---|
+| `last_enqueued_collective` | 4324668 | **4324645** |
+| `last_started_collective` | 4324646 | 4324645 |
+| `last_completed_collective` | 4324645 | 4324645 |
+
+Rank 1's `last_enqueued_collective = 4324645` is the key datum: it
+confirms that rank 1's autograd thread was stuck *inside*
+`pncclAllReduce` for 4324646 for the entire 30 minutes, since
+`lastEnqueuedSeq_` only bumps after the call returns. This is the
+same diagnostic we used in run 5's FR dump analysis (§4 run_5) and
+it holds here.
+
+**FR entry for the stuck collective (4324646):**
+
+| | rank 0 | rank 1 |
+|---|---|---|
+| `state` | `started` | `completed` (via abort) |
+| `time_created_ns` | 09:48:12.741 | 09:48:12.711 |
+| `time_discovered_started_ns` | 10:18:13.059 | 10:18:13.389 |
+| `time_discovered_completed_ns` | `None` | 10:18:13.389 |
+| gap (start − create) | **1,800,318 ms** | same window |
+
+The 30-minute gap between entry creation and discovered-start on
+rank 0 is the exact watchdog window — the kernel never actually
+launched on rank 0's NCCL stream either, until the peer's abort
+fired at 10:18:13 and the CUDA events completed with error. Same
+signal as run 5 (§4 run_5): this is not a kernel that ran slowly,
+it's a collective that never got off the ground.
+
+**The striking asymmetry — entries in `scheduled` state:**
+
+- **Rank 0**: 22 entries (`4324647`–`4324668`) in state `scheduled`,
+  all created between 09:48:12.742 and 09:48:12.826 (an 85 ms burst
+  following the stuck 4324646). Rank 0's reducer ran through the
+  *entire* backward for batch 152807 on the CPU side, enqueuing ~23
+  allreduces on the NCCL stream, all blocked behind 4324646 which
+  never started.
+- **Rank 1**: **zero entries beyond 4324646.** Rank 1's autograd
+  thread blocked inside the very first bucket's `pncclAllReduce` for
+  4324646 and never returned, so DDP's reducer never got a chance to
+  issue allreduces for buckets 2–15. The FR buffer is cleanly
+  truncated at the stuck collective.
+
+This asymmetry matches the §3.4 live stack picture exactly:
+
+- Rank 0's autograd path successfully returned from `pncclAllReduce`
+  for all its bucket collectives (just blocks later in `.item()` per
+  §6.0). Consistent with rank 0's proxy progress thread actively
+  spinning in `sched_yield` — it's trying to make progress on the
+  queued ops but can't because the peer's side of the collective
+  isn't happening.
+- Rank 1's autograd path never returned from the first bucket's
+  `pncclAllReduce`. Consistent with rank 1's proxy progress thread
+  being asleep in `pthread_cond_wait` — from its perspective there
+  are no posted ops to drain, because the autograd thread is stuck
+  *before* posting.
+
+Together §3.4 and §3.5 pin the bug to the interaction between the
+autograd thread and the proxy thread on rank 1 — specifically, the
+proxy-op pool signaling between `ncclLocalOpAppend` (autograd side)
+and `ncclProxyGetPostedOps` / `ncclProxyAppend` (proxy side).
+
+**`frames` field is empty on every entry (known limitation).** All
+40,000 FR entries across both ranks have `frames = []` despite
+`TORCH_NCCL_TRACE_CPP_STACK=1` being set in
+`ray_train.py:NCCL_ENV_VARS`. PyTorch's `FlightRecorder::get()`
+reads this env var (also accepts `TORCH_FR_CPP_STACK`) in a
+one-time singleton initialization
+(`torch/include/.../FlightRecorder.hpp:112`), so if the var isn't
+in the worker's environment at the moment `FlightRecorder::get()`
+is first called, `capture_cpp_stack_` stays false for the life of
+the process. Ray's `runtime_env={"env_vars": ...}` should propagate
+at worker-spawn time, so the most likely causes are (a) the var is
+unset by the time FlightRecorder is first touched (C++ static
+init order vs. Ray's env injection), or (b) the var isn't
+reaching the worker at all. Next-run mitigation: export it from
+the launcher shell (or `os.environ` in `ray_train.py:main()` before
+`ray.init()`) and verify with
+`cat /proc/$(pgrep -f RayTrainWorker | head -1)/environ | tr '\0' '\n' | grep TRACE_CPP`
+once workers are up.
+
 ### Cross-run patterns
 
 1. **SeqNum at failure is highly variable** — 629 K / 917 K / 923 K /
-   1.16 M / 1.72 M across five failures. There is no "magic" collective
-   count.
-2. **The crashing host is not consistent** — both `.10` and `.11`, and
-   both `.12` and `.13`, have hosted the SIGSEGV. Not a single-machine
-   hardware fault.
-3. **Which role crashes (rank 0 vs rank 1) is not consistent** — run
-   0/1/2 crash on rank 0, run 4 crashes on rank 1, run 5 crashes on
-   rank 0 again. Not a rank-specific code path.
+   1.16 M / 1.72 M / 4.32 M across six failures (20 h to 5.67 d
+   elapsed). There is no "magic" collective count.
+2. **The crashing physical host is evenly split, 3 vs 3.** The two
+   IP ranges alias the same two machines — `.10`/`.12` are both
+   aitopatom-09a5, `.11`/`.13` are both aitopatom-0512 (different
+   physical ports, same box). Stuck host by run: run 0 = 09a5,
+   run 1 = 0512, run 2 = 0512, run 4 = 09a5, run 5 = 0512,
+   run 6 = 09a5. No single-machine hardware fault, and no host
+   preference.
+3. **Rank-role shows a 4-vs-2 bias** — runs 0/1/2/5 stall on rank 0,
+   runs 4/6 stall on rank 1. The stall follows the *role*, not the
+   *host*: nothing intrinsic to either machine determines which side
+   stalls. This is consistent with the §6.2 (1) NCCL proxy-pool
+   synchronization bug, which is a symmetric race — either rank can
+   lose, with some slight per-run asymmetry in which rank's reducer
+   finishes buckets first.
 4. **On the watchdog (peer) rank, `last_enqueued − last_completed` is
    always 14-23** — exactly one DDP backward pass' worth of gradient
    buckets. The peer rank finished its own backward (all buckets
@@ -433,6 +672,57 @@ Rank 0 entered the same backward at 06:39:16.425 and never reached
   (10.9.9.x) for NCCL bootstrap; run 5 used `enp1s0f1np1` (QSFP56,
   same link as the data path), and still failed. Bootstrap TCP on
   the management LAN is not the cause.
+
+### 6.3 NCCL Proxy Progress thread lands on E-core — observed correlation
+
+Diffing NCCL startup logs (`NCCL_DEBUG=INFO`, `NCCL_DEBUG_SUBSYS=INIT`)
+across failing and clean runs reveals a pattern in which CPU core the
+Proxy Progress thread is placed on at `ncclCommInitRankConfig` time.
+
+The GB10 SoC has a big.LITTLE topology: 10 performance cores
+(Cortex-X925, assumed cores 0–9) and 10 efficiency cores
+(Cortex-A725, assumed cores 10–19). Pending `lscpu -e` confirmation.
+
+| Run | Stuck rank | Host | Proxy Progress core | Core class | Outcome |
+|-----|------------|------|---------------------|------------|---------|
+| Run 4 | Rank 1 | aitopatom-09a5 | 16 | E-core | **hung at ~38 h** |
+| Run 5 | Rank 0 | aitopatom-0512 | 12 | E-core | **hung at ~30 h** |
+| Run 6 | Rank 1 | aitopatom-09a5 | 7 (both ranks) | P-core | **hung at ~136 h (5.67 d)** |
+
+**Run 6 updated this picture.** Run 6 had both ranks' Proxy Progress
+threads on P-core 7 (the hypothesis's "protected" configuration) and
+still failed, at 5.67 days. So P-core placement is **not sufficient to
+prevent** the hang — but it *did* extend MTTF from 30–38 h to 136 h
+(3–4×). The corrected reading:
+
+- **Strong form falsified**: "E-core placement causes hangs." A run
+  with both proxy threads on P-cores hung.
+- **Weak form still plausible**: "E-core placement *increases*
+  hang probability per unit time," i.e. E-core placement raises the
+  rate at which the underlying NCCL bug fires, but does not create
+  it. Consistent with a memory-ordering or synchronization race whose
+  trigger window is sensitive to core frequency and completion-poll
+  cadence.
+
+In both pre-run-6 failures the stalled rank's proxy thread was on an
+E-core; run 6 broke that correlation by hanging from a P-core.
+
+**Why this matters for §6.2 hypothesis (1):** With GDR off, the Proxy
+Progress thread is on the hot path for every RDMA completion poll
+(`ibv_poll_cq` or mlx5 fast-path). An E-core runs at lower
+frequency and has a smaller cache hierarchy than a P-core. Over
+sustained load (~1 M collectives / 30 h), the slower polling cadence
+could cause the proxy thread to miss an RDMA completion event window
+or fall far enough behind that the op pool's free list drains, putting
+the autograd thread into the `ncclLocalOpAppend` slow-path spin.
+
+**Why it's not deterministic:** The peer rank in run 5
+(aitopatom-09a5, rank 1) also had its Proxy Progress on an E-core
+(core 19) and did *not* stall. And run 6 hung with both ranks on
+P-cores. So E-core placement is neither necessary nor sufficient —
+at best it's a rate modifier on a race condition whose root cause
+lives elsewhere (most likely in NCCL 2.28 itself; see §3.4 and
+§6.2).
 
 Three separate questions:
 
@@ -524,30 +814,37 @@ the allreduce kernel on R_peer never gets its peer data, and both
 ranks go silent for exactly the 30-minute watchdog window. This is
 the shape we see.
 
-Plausible reasons for the proxy thread to stall, in rough order:
+Plausible reasons for the proxy thread to stall, **re-ranked after the
+run 6 live snapshot (§3.4)**:
 
-1. **ConnectX-7 / mlx5 driver stall on an RDMA completion.** The
-   proxy thread is blocked in `ibv_poll_cq` (or a related mlx5 fast-
-   path), waiting on a completion that never arrives because the
-   driver lost track of a queue pair, got a silent ECN/CNP-induced
-   reset, or hit a known mlx5 firmware corner case. Still the
-   leading hypothesis because: (a) it cleanly explains why both
-   ranks resume together only when the peer tears the comm down;
-   (b) it is the kind of bug that manifests as "stalls after 1-2
-   days of perfectly healthy traffic"; (c) run 5 ran with a single
-   HCA and *still* failed at ~30 h, which only tightens this —
-   a single stuck queue pair on the one active HCA is enough to
-   wedge the whole allreduce. Distinguishing it from (2)/(3)
-   requires a live py-spy / gdb sample of the proxy progress
-   thread during a stall (§7.5).
+1. **[NEW LEADING] NCCL 2.28 proxy pool synchronization bug on
+   aarch64 / Blackwell.** Run 6's live stack capture shows the
+   stuck rank's proxy progress thread sleeping on a condvar in
+   `ncclProxyGetPostedOps` (proxy.cc:797) — it believes it has no
+   work — while the autograd thread is at 100% CPU inside
+   `ncclLocalOpAppend`'s free-list slow path (proxy.cc:499) — it
+   believes no free slot is available. The producer (proxy) and
+   consumer (autograd) disagree about the pool state: exactly the
+   shape of a memory-ordering regression on aarch64's weakly-ordered
+   model, where a missing release/acquire on `freeOps[tpLocalRank]`
+   or the condvar signal path would work by accident on x86 and
+   fail randomly on aarch64 after ~10⁶ iterations. Matches every
+   observed pattern: hangs after hours-to-days of healthy traffic,
+   variable collective count at failure, ranks resume together only
+   on comm abort (which forces the autograd spin to exit). The
+   DGX Spark is a new platform; NCCL 2.28 got the ulimit fix for
+   aarch64 worker stacks but has not been soak-tested on GB10 for
+   days on end.
 
-2. **NCCL 2.28 proxy progress thread bug on aarch64 / Blackwell.**
-   The DGX Spark is a new platform; NCCL 2.28 got the ulimit fix
-   for aarch64 worker stacks but has not been soak-tested on GB10
-   for days on end. A memory-ordering bug in `ncclLocalOpAppend` /
-   `proxyProgressAsync` on a weakly-ordered aarch64 memory model
-   could produce exactly this "pool drains fine for 10^6 ops then
-   hangs" pattern. Harder to prove without an upstream repro.
+2. **[DEMOTED, largely ruled out] ConnectX-7 / mlx5 driver stall on
+   an RDMA completion.** Previously the leading hypothesis. Run 6's
+   live snapshot rules this out directly: neither rank's proxy thread
+   is in `ibv_poll_cq` or any mlx5 code path. The stuck rank's
+   proxy thread is sleeping on a condvar; the peer's proxy thread
+   is in NCCL's own progress-loop `sched_yield` at proxy.cc:986
+   (not in verbs). No NIC error counters beyond FEC-corrected bits
+   (post-FEC zero), no driver dmesg lines, no QP resets. The NIC
+   path is healthy.
 
 3. **Host-staging buffer exhaustion / back-pressure deadlock.**
    With GDR off, NCCL uses a pinned host buffer per channel for
@@ -717,7 +1014,49 @@ layer stall over an NCCL-internal bug.
 A `gdb -batch -ex 'thread apply all bt full'` capture is strictly
 more informative than py-spy for this — take both.
 
-### 7.7 Upstream bug search / report
+### 7.7 Pin worker processes to P-cores (`sched_setaffinity`) — **partial mitigation only**
+
+**Status after run 6:** proposed before run 6 completed. Run 6 was
+*not* launched with this pinning but happened to get P-core 7 for
+both ranks' proxy threads by luck, and **still hung at 5.67 days**.
+So P-core placement is not a fix. It may still be worth applying as
+a rate-limiting mitigation (run 6 lasted 2.5× longer than any prior
+run, which if causal would be a meaningful extension of MTTF) but it
+does not prevent the bug.
+
+Based on the §6.3 E-core correlation, constrain the entire worker
+process — and therefore NCCL's Proxy Progress thread — to the 10
+performance cores (0–9). Add this at the top of
+`distributed_train_loop` in `trainable_architecture.py`, **before**
+any NCCL call (the first NCCL call happens inside
+`ray.train.torch.prepare_model` which triggers `ncclCommInitRankConfig`):
+
+```python
+import os
+os.sched_setaffinity(0, set(range(10)))   # pin to P-cores 0–9
+```
+
+This is a process-wide setting — all threads created after this
+call (including NCCL's proxy threads, which are spawned during
+`ncclCommInitRankConfig`) inherit the affinity mask. NCCL's internal
+`sched_setaffinity` for its proxy threads picks from the set of
+allowed cores, so restricting the mask to 0–9 guarantees Proxy
+Progress lands on a P-core.
+
+**Pending:** Confirm core numbering with `lscpu -e` on the nodes
+before deploying. If P-cores turn out to be 10–19, flip the range.
+
+**Risk:** Low. Worst case is minor contention among 10 P-cores for
+Python + CUDA + NCCL threads, but GB10 has plenty of P-core headroom
+for a 2-worker setup and the E-cores would still handle OS / NFS /
+background work.
+
+**Evaluation:** If the run with this pinning completes the full
+training without hanging, that's strong evidence (though still
+correlational). If it hangs again and the watcher captures show
+the proxy thread on a P-core, the E-core hypothesis is falsified.
+
+### 7.8 Upstream bug search / report
 
 - Collect run 4 artifacts (log, crash stack, NCCL version, topology) and
   cross-check against the NVIDIA DGX Spark / GB10 forum threads below.
@@ -756,10 +1095,15 @@ design:
    rank's log file. Let them fire independently. (The stuck rank
    and the peer both stop writing — stuck rank is in backward, peer
    is in `.item()` — so both watchers will trigger.)
-6. **`py-spy --native` is required.** Without `--native`, py-spy
-   only shows Python frames and misses every frame in the NCCL /
-   CUDA / DDP reducer C++ layer. For this bug those are the frames
-   we need.
+6. **`py-spy --native` does not work on aarch64.** We discovered in
+   run 6 that `py-spy dump --native` on GB10 returns only
+   `"Collecting stack traces from native extensions (--native) is not
+   supported on your platform."` — so gdb is the *only* source of
+   native C/C++ frames on this cluster. The watcher still calls
+   py-spy (cheap, and works on x86 hosts), but gdb is the
+   load-bearing capture step for NCCL hangs. Don't assume a
+   py-spy-native file is empty because the hang is gone; check the
+   gdb output.
 7. **Don't send `SIGABRT` after capture.** It would kill the worker
    and potentially lose the natural NCCL watchdog path (and its
    flight-recorder dump). Let the hang persist after capture.
@@ -1025,14 +1369,14 @@ The *most important* thread in the dump is NOT the one with the
 familiar `ncclLocalOpAppend` / autograd_hook stack (that's the
 symptom — we already know what its top frame looks like). It's the
 **NCCL proxy progress thread**. Where it is parked tells us which
-hypothesis in §6.2 is correct:
+hypothesis in §6.2 is correct. Run 6's capture answered this:
 
-| Proxy thread is in... | Points to... |
-|---|---|
-| `ibv_poll_cq` / mlx5 ioctl, not moving between samples | (1) mlx5 driver stall on a lost RDMA completion |
-| NCCL proxy progress loop spinning with no pending work | (2) NCCL 2.28 proxy thread bug |
-| futex / condition variable on the op pool | (3) host-staging buffer back-pressure |
-| NCCL error-handling path, but "stuck" | (4) transient proxy error + broken recovery |
+| Proxy thread is in... | Points to... | Observed (run 6)? |
+|---|---|---|
+| `ibv_poll_cq` / mlx5 ioctl, not moving between samples | (2) mlx5 driver stall on a lost RDMA completion | **No** — ruled out |
+| NCCL proxy progress loop `sched_yield` with ops scheduled | Peer rank expected state | **Yes**, on peer rank 0 |
+| **`pthread_cond_wait` in `ncclProxyGetPostedOps`** (no work) | **(1) NCCL 2.28 proxy-pool sync bug** | **Yes, on stuck rank 1** — confirmed |
+| NCCL error-handling path, but "stuck" | Transient proxy error + broken recovery | No
 
 The autograd thread on the stuck rank should show
 `ncclLocalOpAppend → SaveProxy → … → pncclAllReduce → autograd_hook`

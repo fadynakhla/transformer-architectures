@@ -22,9 +22,9 @@ NCCL_ENV_VARS = {
     "TORCH_NCCL_DESYNC_DEBUG": "1",
     "TORCH_NCCL_DEBUG_INFO_TEMP_FILE": "/data/nccl_dumps/nccl_trace_rank_",
     "NCCL_DEBUG": "INFO",
-    "NCCL_DEBUG_SUBSYS": "INIT,NET,COLL",
-    "NCCL_SOCKET_IFNAME": "enp1s0f1np1",
-    "NCCL_IB_HCA": "rocep1s0f1",
+    "NCCL_DEBUG_SUBSYS": "INIT,NET",
+    # "NCCL_SOCKET_IFNAME": "enp1s0f1np1",
+    # "NCCL_IB_HCA": "rocep1s0f1",
     "TORCH_NCCL_TRACE_CPP_STACK": "1",
 }
 
