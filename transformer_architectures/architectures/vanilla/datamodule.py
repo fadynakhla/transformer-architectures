@@ -74,6 +74,7 @@ class TransformerDataModule(distributed.DataModule):
                 token_budget=self.token_budget,
                 sort_window=self.sort_window,
                 generator=self.generator,
+                drop_last=True,  # required for DDP: prevents rank desync from unequal batch counts
             )
 
     def train_dataloader(self) -> torchd.DataLoader[dict[str, np.ndarray]]:

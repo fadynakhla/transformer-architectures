@@ -201,6 +201,8 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         global_step = 0
         best_eval = 0.0 if self.train_config.comparator == ">" else 1e9
         for epoch in range(self.train_config.epochs):
+            if hasattr(data_module, 'train_batch_sampler') and data_module.train_batch_sampler is not None:
+                data_module.train_batch_sampler.set_epoch(epoch)
             global_step = self.train_epoch(
                 model,  # type: ignore
                 data_module,

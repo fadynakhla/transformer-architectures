@@ -37,12 +37,24 @@ class TokenBudgetBatchSampler(torchd.Sampler[list[int]]):
         self.sort_window = sort_window
         self.generator = generator
         self.drop_last = drop_last
+        self._base_seed = int(generator.initial_seed()) if generator is not None else 42
         n = len(dataset)  # type: ignore[arg-type]
         self._lengths = [len(dataset[i][length_key]) for i in range(n)]
         # Pre-build once with global sort for a stable __len__ approximation.
         self._static_batches = self._pack(
             sorted(range(n), key=lambda i: self._lengths[i])
         )
+
+    def set_epoch(self, epoch: int) -> None:
+        """Reseed the generator for the given epoch.
+
+        Must be called on all ranks with the same epoch value before iterating
+        the dataloader in distributed training. Ensures generator state is
+        identical across ranks at the start of each epoch, preventing batch
+        count drift that causes DDP rank desync.
+        """
+        if self.generator is not None:
+            self.generator.manual_seed(self._base_seed + epoch)
 
     def _pack(self, indices: list[int]) -> list[list[int]]:
         """Pack a length-sorted index list into token-budget batches."""
