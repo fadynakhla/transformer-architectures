@@ -34,10 +34,6 @@ class ReproConfig(pydantic.BaseModel):
     tick_every_s: float = 30.0
     verbose_step_trace: bool = False
 
-    inject_rank: int = -1
-    inject_step: int = -1
-    inject_sleep_ms: int = 0
-
 
 DTYPE_MAP = {"fp32": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}
 
@@ -89,18 +85,6 @@ def install_diagnostic_signals(rank: int) -> None:
 
     signal.signal(signal.SIGTERM, die)
     signal.signal(signal.SIGINT, die)
-
-
-# def maybe_inject_sleep(cfg: ReproConfig, rank: int, step: int) -> None:
-#     if (
-#         cfg.inject_rank == rank
-#         and cfg.inject_step == step
-#         and cfg.inject_sleep_ms > 0
-#     ):
-#         tqdm.write(
-#             f"rank={rank} injecting sleep step={step} ms={cfg.inject_sleep_ms}"
-#         )
-#         time.sleep(cfg.inject_sleep_ms / 1000.0)
 
 
 def main() -> None:
@@ -164,8 +148,6 @@ def main() -> None:
         smoothing=0.1,
     )
     for step in pbar:
-        # maybe_inject_sleep(cfg, rank, step)
-
         x.normal_()
         y.normal_()
 

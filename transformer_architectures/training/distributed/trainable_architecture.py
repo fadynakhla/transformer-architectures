@@ -1,3 +1,4 @@
+import datetime
 import faulthandler
 import logging
 import pathlib
@@ -210,6 +211,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
 
         data_module = self.build_datamodule()
         data_module.setup(distributed_ctx)
+        torch.distributed.barrier(timeout=datetime.timedelta(hours=2))
 
         if distributed_ctx.is_head:
             mlflow.log_params(params=self.make_run_params())

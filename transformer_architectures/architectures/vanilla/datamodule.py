@@ -59,7 +59,10 @@ class TransformerDataModule(distributed.DataModule):
             logger.info("All data scattered/broadcasted.")
             logger.info("Creating datasets on all workers.")
 
+        logger.info(f"Creating local train dataset on rank {ctx.world_rank} with {len(local_train)} samples.")
         self._train_dataset = data.TransformerDataset(local_train, self.tokenizer)
+        logger.info("Created local train dataset.")
+
         self._val_dataset = data.TransformerDataset(val, self.tokenizer)
         self._test_dataset = data.TransformerDataset(test, self.tokenizer)
         if ctx.is_head:

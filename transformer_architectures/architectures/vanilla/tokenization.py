@@ -1,10 +1,14 @@
 from typing import Generic, Literal, Optional, TypeVar, overload
 import multiprocessing
 
+import loguru
 import pydantic
 import torch
 
 from transformer_architectures import tokenization
+
+logger = loguru.logger
+
 
 PaddingOptions = Literal["longest", "max"]
 
@@ -138,12 +142,14 @@ class Tokenizer(tokenization.BaseTokenizer):
         input_ids: list[list[int]] | torch.Tensor
         decoder_input_ids: list[list[int]] | torch.Tensor
         allowed = {self.bos_token, self.eos_token}
+        logger.info("Wrapping strings in bos/eos.")
         encoder_inputs = [
             f"{self.bos_token}{t}{self.eos_token}" for t in encoder_inputs
         ]
         decoder_inputs = [
             f"{self.bos_token}{t}{self.eos_token}" for t in decoder_inputs
         ]
+        logger.info("Calling encode_batch on input ids and decoder input ids")
         input_ids = self.encoding.encode_batch(
             encoder_inputs,
             num_threads=multiprocessing.cpu_count(),
@@ -154,8 +160,10 @@ class Tokenizer(tokenization.BaseTokenizer):
             num_threads=multiprocessing.cpu_count(),
             allowed_special=allowed,
         )
+        logger.info("Input ids and decoder input ids encoded.")
 
         if padding:
+            logger.info("Padding output.")
             input_ids = self._pad_and_truncate(input_ids, padding, truncation)
             decoder_input_ids = self._pad_and_truncate(
                 decoder_input_ids, padding, truncation
@@ -164,6 +172,7 @@ class Tokenizer(tokenization.BaseTokenizer):
         mask: Optional[torch.Tensor] = None
         decoder_mask: Optional[torch.Tensor] = None
         if return_tensors:
+            logger.info("Creating input and mask tensors.")
             input_ids, mask = self._tensorize(input_ids)
             decoder_input_ids, decoder_mask = self._tensorize(decoder_input_ids)
 

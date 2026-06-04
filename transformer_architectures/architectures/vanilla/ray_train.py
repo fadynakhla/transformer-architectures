@@ -17,14 +17,14 @@ CONFIG_PATH = "configs/vanilla_large_distributed.yaml"
 
 NCCL_ENV_VARS = {
     "TORCH_FR_BUFFER_SIZE": "20000",
-    "TORCH_NCCL_TRACE_BUFFER_SIZE": "20000",
+    # "TORCH_NCCL_TRACE_BUFFER_SIZE": "20000",
     "TORCH_NCCL_DUMP_ON_TIMEOUT": "1",
     "TORCH_NCCL_DESYNC_DEBUG": "1",
     "TORCH_NCCL_DEBUG_INFO_TEMP_FILE": "/data/nccl_dumps/nccl_trace_rank_",
     "NCCL_DEBUG": "INFO",
     "NCCL_DEBUG_SUBSYS": "INIT,NET",
-    # "NCCL_SOCKET_IFNAME": "enp1s0f1np1",
-    # "NCCL_IB_HCA": "rocep1s0f1",
+    "NCCL_SOCKET_IFNAME": "enp1s0f1np1",
+    "NCCL_IB_HCA": "rocep1s0f1",
     "TORCH_NCCL_TRACE_CPP_STACK": "1",
 }
 
@@ -49,7 +49,7 @@ def main() -> None:
                 use_gpu=ray_config.use_gpu,
                 resources_per_worker={"GPU": 1, "CPU": 16},
             ),
-            torch_config=TorchConfig(backend=ray_config.backend),
+            torch_config=TorchConfig(backend=ray_config.backend, timeout_s=7200),
         )
         result = trainer.fit()
     print(f"Training finished. Result: {result}")

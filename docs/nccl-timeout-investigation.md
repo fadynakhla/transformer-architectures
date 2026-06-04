@@ -910,10 +910,108 @@ If gloo doesn't hang, NCCL / RoCE is the suspect.
 
 ### 7.3 Standalone `nccl-tests` soak
 
-Run `nccl-tests/build/all_reduce_perf -b 8M -e 64M -f 2 -g 1 -n 10000000`
-on the same pair of nodes, no PyTorch. If this also eventually stalls, we
-have a pure NCCL / network reproducer to hand to NVIDIA. If it runs
-indefinitely, the problem needs PyTorch / DDP in the loop.
+Run `all_reduce_perf` on the same pair of nodes with no PyTorch in the
+loop. If it also eventually stalls, we have a pure NCCL / RoCE
+reproducer to hand to NVIDIA. If it runs indefinitely, the problem
+needs PyTorch / DDP in the loop (DDP's bursty per-bucket issuing
+pattern, `no_sync` cycle transitions, or the autograd/Reducer
+interaction with NCCL).
+
+**Caveat on coverage.** nccl-tests issues allreduces back-to-back at
+peak rate. DDP+grad_accum issues 16 buckets in a tight burst (sync
+step's backward) followed by 3 quiet steps with no NCCL traffic at
+all (no_sync forward+backward), then repeats. The proxy thread sees
+a very different work pattern. If §6.2(1) is correct (proxy-pool
+race triggered by exactly that burst→idle→burst rhythm), nccl-tests
+may never hit the trigger window even though NCCL is the culprit. A
+clean nccl-tests result narrows the suspect set but does not exonerate
+NCCL — pair it with §7.4 and the gloo run for a real isolation matrix.
+
+**Build location.** NCCL standalone is at `$HOME/nccl/build`; nccl-tests
+is at `$HOME/nccl-tests/build` and was linked against the standalone
+NCCL, not torch's bundled copy. Both must exist at the same path on
+both nodes (or be on shared storage), since mpirun forwards env but
+not files.
+
+**Setup (run on the launch host; same paths must exist on the peer):**
+
+```bash
+export CUDA_HOME=/usr/local/cuda
+export MPI_HOME=/usr/lib/aarch64-linux-gnu/openmpi
+export NCCL_HOME=$HOME/nccl/build
+export LD_LIBRARY_PATH=$NCCL_HOME/lib:$CUDA_HOME/lib64:$MPI_HOME/lib:$LD_LIBRARY_PATH
+
+export UCX_NET_DEVICES=enp1s0f1np1
+export NCCL_SOCKET_IFNAME=enp1s0f1np1
+export OMPI_MCA_btl_tcp_if_include=enp1s0f1np1
+```
+
+Sanity-check that `libnccl.so.2` resolves before launching:
+
+```bash
+ldd $HOME/nccl-tests/build/all_reduce_perf | grep -i nccl
+```
+
+Expect `libnccl.so.2 => $NCCL_HOME/lib/libnccl.so.2` (and matching CUDA
+libs). If `not found`, the path in `LD_LIBRARY_PATH` is wrong — fix
+before invoking mpirun, since `mpirun -x LD_LIBRARY_PATH` only forwards
+the value it sees in the launch shell.
+
+**Soak invocation.** Match the bucket sizes the repro hangs on (8.4M-
+element bf16 ALLREDUCE ≈ 16 MB) and pick `-n` high enough that the
+benchmark won't exit on its own for the soak window:
+
+```bash
+mpirun -np 2 -H 192.168.200.12:1,192.168.200.13:1 \
+  --mca plm_rsh_agent "ssh -o UserKnownHostsFile=/dev/null \
+                           -o StrictHostKeyChecking=no" \
+  -x LD_LIBRARY_PATH \
+  -x UCX_NET_DEVICES \
+  -x NCCL_SOCKET_IFNAME \
+  -x OMPI_MCA_btl_tcp_if_include \
+  $HOME/nccl-tests/build/all_reduce_perf \
+    -b 8M -e 64M -f 2 -g 1 -w 100 -n 1000000000
+```
+
+`-n` is iterations *per* size, so with `-b 8M -e 64M -f 2` (4 sizes:
+8/16/32/64 MB) you'd issue up to 4 × 10⁹ allreduces — effectively
+unbounded for the soak.
+
+If you want a tighter match to the repro's exact bucket size and a
+single message size for cleaner interpretation:
+
+```bash
+$HOME/nccl-tests/build/all_reduce_perf -b 16M -e 16M -f 2 -g 1 -w 100 -n 1000000000
+```
+
+**Optional: capture NCCL logs in case of stall.** Add to the mpirun
+`-x` list and the launch env:
+
+```bash
+-x NCCL_DEBUG=INFO
+-x NCCL_DEBUG_FILE=/data/nccl_logs/all_reduce_%h_%p.log
+```
+
+`/data/nccl_logs` should be NFS-shared (or at minimum exist on both
+nodes) so a stalled rank's last debug lines survive the abort.
+
+**How long.** Doc-pattern hangs land between 20 h and 5.67 d. Plan
+for at least 48–72 h of soak before declaring nccl-tests "clean";
+push to 5–7 d for a stronger negative. Run the launch under tmux
+(or detached via `nohup ... &`) on the launch host — the launch
+shell is the only one that has to stay alive; mpirun's orchestration
+holds the remote process for you.
+
+**Interpretation paired with §7.4 and §7.2:**
+
+- nccl-tests stalls → pure NCCL / verbs / driver reproducer.
+- nccl-tests clean, OSU clean, gloo also clean → bug needs the
+  PyTorch+NCCL interaction specifically (DDP reducer, bucket-burst
+  pattern, autograd-engine coupling). §6.2(1) leading hypothesis
+  should be re-weighted toward the NCCL-side of that interaction
+  rather than NCCL standalone.
+- nccl-tests clean, gloo also hangs → bug is above NCCL entirely
+  (DDP / autograd / Python).
 
 ### 7.4 OSU microbenchmarks — RDMA path without NCCL
 
