@@ -1,7 +1,10 @@
 from typing import Literal, Optional, TypeVar
 import dataclasses
+import itertools
 import multiprocessing
+import os
 
+import loguru
 import numpy as np
 import pydantic
 import torch
@@ -10,6 +13,8 @@ from torch.utils import data as torchd
 from transformer_architectures import samplers
 from transformer_architectures.architectures.vanilla import tokenization
 from transformer_architectures.training import data_utils
+
+logger = loguru.logger
 
 IGNORE_ID = -100
 
@@ -91,25 +96,48 @@ class TransformerDataset(torchd.Dataset[dict[str, np.ndarray]]):
         }
 
     def _setup_arrays(self, data: list[SourceTarget]) -> None:
+        logger.info(
+            "_setup_arrays: n_samples={} cpu_count={} os_cpu_count={} sched_affinity={}",
+            len(data),
+            multiprocessing.cpu_count(),
+            os.cpu_count(),
+            sorted(os.sched_getaffinity(0)),
+        )
+        logger.info("Tokenizing data with tiktoken.")
         tokenized = self.tokenizer(
             encoder_inputs=[dp.source for dp in data],
             decoder_inputs=[dp.target for dp in data],
         )
-        enc_flat: list[int] = []
-        dec_flat: list[int] = []
-        enc_offsets: list[int] = [0]
-        dec_offsets: list[int] = [0]
-        for enc_ids, dec_ids in zip(
-            tokenized.input_ids, tokenized.decoder_input_ids, strict=True
-        ):
-            enc_flat.extend(enc_ids)
-            dec_flat.extend(dec_ids)
-            enc_offsets.append(len(enc_flat))
-            dec_offsets.append(len(dec_flat))
-        self._input_ids_flat = np.array(enc_flat, dtype=np.int32)
-        self._decoder_ids_flat = np.array(dec_flat, dtype=np.int32)
-        self._input_ids_offsets = np.array(enc_offsets, dtype=np.int64)
-        self._decoder_ids_offsets = np.array(dec_offsets, dtype=np.int64)
+        logger.info("Data tokenized")
+
+        logger.info("Creating data and offset arrays")
+        enc_ids = tokenized.input_ids
+        dec_ids = tokenized.decoder_input_ids
+        n = len(enc_ids)
+
+        enc_lens = np.fromiter((len(x) for x in enc_ids), dtype=np.int64, count=n)
+        dec_lens = np.fromiter((len(x) for x in dec_ids), dtype=np.int64, count=n)
+
+        self._input_ids_offsets = np.empty(n + 1, dtype=np.int64)
+        self._input_ids_offsets[0] = 0
+        np.cumsum(enc_lens, out=self._input_ids_offsets[1:])
+
+        self._decoder_ids_offsets = np.empty(n + 1, dtype=np.int64)
+        self._decoder_ids_offsets[0] = 0
+        np.cumsum(dec_lens, out=self._decoder_ids_offsets[1:])
+        logger.info("Offset arrays created")
+
+        self._input_ids_flat = np.fromiter(
+            itertools.chain.from_iterable(enc_ids),
+            dtype=np.int32,
+            count=int(self._input_ids_offsets[-1]),
+        )
+        self._decoder_ids_flat = np.fromiter(
+            itertools.chain.from_iterable(dec_ids),
+            dtype=np.int32,
+            count=int(self._decoder_ids_offsets[-1]),
+        )
+        logger.info(f"Data arrays created with lengths encoder input ids: {len(self._input_ids_flat)} and decoder input ids: {len(self._decoder_ids_flat)}")
 
 
 class TransformerDataCollator:

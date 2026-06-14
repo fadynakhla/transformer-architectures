@@ -24,6 +24,7 @@ class BaseTokenizer:
         **special_tokens: str,
     ) -> None:
         base_encoding = tiktoken.get_encoding(encoding_name=base_encoding_name)
+        self.base_encoding_name = base_encoding_name
         self._name_to_special_token = special_tokens
         self._name_to_special_id = self._get_name_to_special_ids(**special_tokens)
         self.special_tokens = {
