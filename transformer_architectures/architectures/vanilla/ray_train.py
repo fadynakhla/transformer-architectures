@@ -1,5 +1,3 @@
-import multiprocessing
-import os
 import sys
 
 import mlflow
@@ -23,8 +21,8 @@ NCCL_ENV_VARS = {
     "TORCH_NCCL_DEBUG_INFO_TEMP_FILE": "/data/nccl_dumps/nccl_trace_rank_",
     "NCCL_DEBUG": "INFO",
     "NCCL_DEBUG_SUBSYS": "INIT,NET",
-    "NCCL_SOCKET_IFNAME": "enp1s0f1np1",
-    "NCCL_IB_HCA": "rocep1s0f1",
+    # "NCCL_SOCKET_IFNAME": "enp1s0f0np0",
+    "NCCL_IB_HCA": "rocep1s0f0:1,roceP2p1s0f0:1",
     "TORCH_NCCL_TRACE_CPP_STACK": "1",
 }
 
@@ -49,7 +47,7 @@ def main() -> None:
                 use_gpu=ray_config.use_gpu,
                 resources_per_worker={"GPU": 1, "CPU": 16},
             ),
-            torch_config=TorchConfig(backend=ray_config.backend, timeout_s=7200),
+            torch_config=TorchConfig(backend=ray_config.backend),
         )
         result = trainer.fit()
     print(f"Training finished. Result: {result}")
