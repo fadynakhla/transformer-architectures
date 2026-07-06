@@ -3,6 +3,19 @@
 Ongoing investigation into long-running training hangs on a 2-node DGX Spark
 (GB10 / Blackwell / aarch64) cluster connected via direct QSFP56 RoCE.
 
+> **Status (2026-06-18):** First clean run-to-completion on the upgraded
+> stack — **run_7 finished after 13 d 4 h** with no hang, clearing the
+> 228 h (9.5 d) minimal-repro threshold and the prior run_6 max of
+> 5.67 d. A second confirmation run is in flight. This is a strong
+> signal that the failure rate has dropped by at least an order of
+> magnitude, **not** a confirmed fix: it is a single success, and the
+> stack changed on several axes at once (NCCL 2.28.9 → 2.29.7, CUDA
+> 13.0 → 13.2, driver → 580.159.03, dual-rail HCA
+> `rocep1s0f0:1,roceP2p1s0f0:1`, plus the PD-wedge cold-cycle fix in
+> `dgx-spark-pd-wedge.md`). Which lever mattered is unknown — the PD
+> fix explains the throughput recovery but **not** the hang, since the
+> wedge was a compute throttle, not a collective hang. See run_7 below.
+
 ## 1. Problem statement
 
 When running distributed training of the vanilla transformer over 2 DGX Spark
@@ -399,6 +412,41 @@ stack state from *inside* the 30-minute stall window, rather than
 reconstructed from post-watchdog crash artifacts. See §3.4. The
 flight recorder dumps from run 6 are in `/data/nccl_dumps/nccl_trace_rank_{0,1}`
 and add corroborating FR-level evidence. See §3.5.
+
+### run_7 — upgraded stack, full run to completion (**first clean run**)
+
+| | |
+|---|---|
+| Outcome | **Completed — no hang.** First run on this fleet to finish training without the `ALLREDUCE` stall. |
+| Runtime | ~13 d 4 h (~316 h) — clears the 228 h (9.5 d) minimal-repro threshold and is **2.3× run_6** (the prior longest, 5.67 d) |
+| NCCL | 2.29.7+cuda13.2 (was 2.28.9+cuda13.0 on runs 0-6) |
+| CUDA driver | 580.159.03 / CUDA 13.2 (was 13.0) |
+| HCA | dual-rail `NCCL_IB_HCA=rocep1s0f0:1,roceP2p1s0f0:1` (runs 4-6 used a single `s0f1` rail) |
+| PD / firmware | post PD-wedge cold-cycle fix, PD/EC/UEFI at 0x507 (see `dgx-spark-pd-wedge.md`) |
+| Confirmation | second run launched immediately after; result pending |
+
+**What this does and does not tell us.** A single clean run past the
+228 h repro point is the strongest positive signal in this
+investigation — on the old stack the proxy-pool race latched even in
+the bare repro by 228 h, and run_7 carries strictly more collective
+traffic per unit time yet ran longer. But it is **one** data point and
+the stack moved on multiple axes simultaneously, so it does not isolate
+a cause and does not by itself constitute a fix:
+
+- The **PD-wedge cold cycle** definitively explains the compute
+  throughput recovery (CPU + GPU declamped), but the wedge was a
+  *throttle*, not a *collective hang* (§ `dgx-spark-pd-wedge.md`), so it
+  is not a candidate explanation for the hang going away.
+- That leaves the **comm-stack changes** — NCCL 2.28.9 → 2.29.7, CUDA
+  13.0 → 13.2, driver → 580.159.03, single → dual rail — as the
+  plausible levers. NCCL 2.29 is the most suspicious given §6.2's
+  proxy-pool diagnosis, but this run cannot distinguish among them.
+
+**Next step:** confirm with the in-flight second run reaching ≥228 h.
+Two-for-two on the new stack would support an order-of-magnitude
+reduction in failure rate with reasonable confidence. To attribute,
+revert one lever at a time on subsequent runs, cheapest first
+(single-rail HCA → NCCL downgrade → driver/CUDA).
 
 ### 3.4 Live stack snapshot (run 6) — the proxy thread is asleep, not in mlx5
 

@@ -21,7 +21,6 @@ import tqdm
 from transformer_architectures.training import (
     base_train_config,
     checkpointing,
-    data_utils,
     grad_logging,
 )
 from transformer_architectures.training.distributed import context, datamodule
@@ -39,30 +38,24 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
     mlflow_run_id: str | None
 
     @abc.abstractmethod
-    def build_model(self) -> nn.Module:
-        ...
+    def build_model(self) -> nn.Module: ...
 
     @abc.abstractmethod
-    def build_datamodule(self) -> datamodule.DataModule:
-        ...
+    def build_datamodule(self) -> datamodule.DataModule: ...
 
     @abc.abstractmethod
-    def build_optimizer(self, model: nn.Module) -> optim.Optimizer:
-        ...
+    def build_optimizer(self, model: nn.Module) -> optim.Optimizer: ...
 
     @abc.abstractmethod
     def build_scheduler(
         self, optimizer: optim.Optimizer, steps_per_epoch: int
-    ) -> optim.lr_scheduler.LRScheduler:
-        ...
+    ) -> optim.lr_scheduler.LRScheduler: ...
 
     @abc.abstractmethod
-    def build_criterion(self) -> nn.Module:
-        ...
+    def build_criterion(self) -> nn.Module: ...
 
     @abc.abstractmethod
-    def make_run_params(self) -> dict[str, Any]:
-        ...
+    def make_run_params(self) -> dict[str, Any]: ...
 
     @abc.abstractmethod
     def train_step(
@@ -71,8 +64,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         batch: Any,
         criterion: nn.Module,
         autocast_ctx: ContextManager,
-    ) -> torch.Tensor:
-        ...
+    ) -> torch.Tensor: ...
 
     @abc.abstractmethod
     def evaluate(
@@ -85,8 +77,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         epoch: int,
         global_step: int,
         distributed_ctx: context.DistributedContext,
-    ) -> dict[str, float]:
-        ...
+    ) -> dict[str, float]: ...
 
     @abc.abstractmethod
     def log_batch(self, batch: Any, step: int, epoch: int) -> None: ...
@@ -110,9 +101,13 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
 
         dataloader = data_module.train_dataloader()
         total_batches = len(dataloader)
-        logger.info(f"rank={distributed_ctx.world_rank} epoch={epoch}. Local total batches: {total_batches}")
+        logger.info(
+            f"rank={distributed_ctx.world_rank} epoch={epoch}. Local total batches: {total_batches}"
+        )
         total_batches = synchronize_int_min(total_batches, distributed_ctx)
-        logger.info(f"rank={distributed_ctx.world_rank} epoch={epoch}. Syncronized total batches: {total_batches}")
+        logger.info(
+            f"rank={distributed_ctx.world_rank} epoch={epoch}. Syncronized total batches: {total_batches}"
+        )
 
         total_groups, final_acc_steps = divmod(total_batches, grad_accumulation_steps)
         if final_acc_steps:
@@ -124,26 +119,16 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
 
         # progress_bar: tqdm.tqdm | None = None
         # if distributed_ctx.is_head:
-        #     progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
-        it = iter(dataloader)
-        i = 0
-        debug_logger = get_train_debug_logger(distributed_ctx.world_rank)
-        # for i, batch in enumerate(dataloader):
-            # if i == 0 and distributed_ctx.is_head:
-            #     self.log_batch(batch, global_step, epoch)
-            # if i >= total_batches:
-            #     logger.info(f"rank={distributed_ctx.world_rank}. Reached max batches: {total_batches}. Breaking.")
-            #     break
-        while i < total_batches:
+            # progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
+        for i, batch in enumerate(dataloader):
+            if i == 0 and distributed_ctx.is_head:
+                self.log_batch(batch, global_step, epoch)
+            if i >= total_batches:
+                break
             is_grad_acc_step = (i + 1) % grad_accumulation_steps == 0
             is_final_step = i == total_batches - 1
             is_update_step = is_grad_acc_step or is_final_step
 
-            debug_logger.info(f"epoch={epoch} step={global_step} batch={i} sync={is_update_step}")
-
-            debug_logger.info(f"epoch={epoch} step={global_step} batch={i} before_next_batch")
-            batch = next(it)
-            debug_logger.info(f"epoch={epoch} step={global_step} batch={i} after_next_batch")
             batch.to(distributed_ctx.device)
 
             sync_context = (
@@ -153,27 +138,22 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                 else model.no_sync()
             )
             with sync_context:
-                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} before_train_step")
                 loss = self.train_step(model, batch, criterion, autocast_ctx)
-                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} after_train_step")
                 acc_norm = final_acc_steps if is_final_step else grad_accumulation_steps
                 loss /= acc_norm
-                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} before_backward")
                 loss.backward()
-                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} after_backward")
                 accumulated_loss += loss.detach()
 
             if is_update_step:
                 accumulated_loss_val = accumulated_loss.item()
-                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} before_optimizer")
                 optimizer.step()
-                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} after_optimizer")
                 scheduler.step()
                 # if progress_bar is not None:
-                #     progress_bar.set_postfix({"loss": accumulated_loss_val}, refresh=False)
+                #     progress_bar.set_postfix(
+                #         {"loss": accumulated_loss_val}, refresh=False
+                #     )
                 #     progress_bar.update(1)
 
-                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} before_post_update_block")
                 is_log_step = global_step % log_interval == 0
                 if distributed_ctx.is_head and (is_log_step or is_final_step):
                     lr = float(scheduler.get_last_lr()[0])
@@ -186,15 +166,12 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                         step=global_step,
                         log_distributions=log_grad_distributions,
                     )
-                debug_logger.info(f"epoch={epoch} step={global_step} batch={i} after_post_update_block")
 
                 accumulated_loss.zero_()
                 global_step += 1
                 optimizer.zero_grad()
-            i += 1
         # if progress_bar is not None:
         #     progress_bar.close()
-        debug_logger.info(f"epoch={epoch} epoch_complete")
         return global_step
 
     def distributed_train_loop(self) -> None:
@@ -295,7 +272,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         if self.mlflow_config.enable_system_metrics:
             node_id = f"{socket.gethostname()}-rank{distributed_ctx.world_rank}"
             mlflow.set_system_metrics_node_id(node_id)
-            mlflow.config.enable_system_metrics_logging()  # pyright: ignore[reportPrivateImportUsage]
+            mlflow.config.enable_system_metrics_logging() # pyright: ignore[reportPrivateImportUsage]
             mlflow.config.set_system_metrics_sampling_interval(  # pyright: ignore[reportPrivateImportUsage]
                 self.mlflow_config.system_metrics_interval
             )
@@ -338,13 +315,21 @@ def log_train_metrics(
     log_distributions: bool,
 ) -> None:
     mlflow.log_metrics(
-        {"train_loss": loss, "learning_rate": lr, "epoch": epoch, "epoch_frac": epoch_frac}, step=step
+        {
+            "train_loss": loss,
+            "learning_rate": lr,
+            "epoch": epoch,
+            "epoch_frac": epoch_frac,
+        },
+        step=step,
     )
 
     grad_logging.log_grads(unwrap_model(model), step, log_distributions)
 
 
-def synchronize_int_min(val_to_sync: int, distributed_ctx: context.DistributedContext) -> int:
+def synchronize_int_min(
+    val_to_sync: int, distributed_ctx: context.DistributedContext
+) -> int:
     # Synchronize to the shortest rank when using variable-length samplers
     if distributed_ctx.world_size > 1:
         t = torch.tensor([val_to_sync], device=distributed_ctx.device)
@@ -366,9 +351,7 @@ def get_train_debug_logger(rank: int) -> logging.Logger:
     path = pathlib.Path(f"/tmp/train_rank{rank}.log")
     handler = logging.FileHandler(path, mode="a")
     handler.setLevel(logging.INFO)
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(message)s")
-    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
 
     logger.addHandler(handler)
     return logger
