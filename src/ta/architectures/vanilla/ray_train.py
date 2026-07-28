@@ -1,0 +1,57 @@
+import sys
+
+import ray
+from ray.train import RunConfig, ScalingConfig
+from ray.train.torch import TorchConfig, TorchTrainer
+
+from ta import config
+from ta.architectures.vanilla.distributed_training import (
+    TrainableTransformer,
+)
+from ta.training import run_tracking
+from ta.training.base_train_config import RayConfig
+
+CONFIG_PATH = "configs/vanilla_large_distributed.yaml"
+
+NCCL_ENV_VARS = {
+    "TORCH_FR_BUFFER_SIZE": "20000",
+    # "TORCH_NCCL_TRACE_BUFFER_SIZE": "20000",
+    "TORCH_NCCL_DUMP_ON_TIMEOUT": "1",
+    "TORCH_NCCL_DESYNC_DEBUG": "1",
+    "TORCH_NCCL_DEBUG_INFO_TEMP_FILE": "/data/nccl_dumps/nccl_trace_rank_",
+    "NCCL_DEBUG": "INFO",
+    "NCCL_DEBUG_SUBSYS": "INIT,NET",
+    # "NCCL_SOCKET_IFNAME": "enp1s0f0np0",
+    "NCCL_IB_HCA": "rocep1s0f0:1,roceP2p1s0f0:1",
+    "TORCH_NCCL_TRACE_CPP_STACK": "1",
+}
+
+
+def main() -> None:
+    config_path = sys.argv[1] if len(sys.argv) > 1 else CONFIG_PATH
+    ray_config = config.load_config(
+        config_path, section="Distributed", model_class=RayConfig
+    )
+    tracking_config = config.load_config(
+        config_path, section="RunTracking", model_class=run_tracking.RunTrackingConfig
+    )
+    ray.init(runtime_env={"env_vars": NCCL_ENV_VARS})
+    run_logger = tracking_config.build()
+    with run_logger.run() as run_meta:
+        arch = TrainableTransformer.from_yaml_config(config_path, run_meta.run_id)
+
+        trainer = TorchTrainer(
+            train_loop_per_worker=arch.distributed_train_loop,
+            scaling_config=ScalingConfig(
+                num_workers=ray_config.num_workers,
+                use_gpu=ray_config.use_gpu,
+                resources_per_worker={"GPU": 1, "CPU": 16},
+            ),
+            torch_config=TorchConfig(backend=ray_config.backend),
+        )
+        result = trainer.fit()
+    print(f"Training finished. Result: {result}")
+
+
+if __name__ == "__main__":
+    main()

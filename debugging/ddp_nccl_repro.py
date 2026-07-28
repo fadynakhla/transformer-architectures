@@ -15,7 +15,7 @@ import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
-from transformer_architectures import config
+from src.ta import config
 
 
 class ReproConfig(pydantic.BaseModel):

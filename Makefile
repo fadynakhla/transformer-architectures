@@ -6,13 +6,13 @@ help: # Show help for each of the Makefile recipes.
 
 .PHONY: format
 format: # Format code with isort and black
-	uv run isort transformer_architectures
-	uv run black transformer_architectures
+	uv run isort src
+	uv run black src
 
 
 .PHONY: typecheck
 typecheck: # Statically type check code using mypy
-	uv run mypy transformer_architectures
+	uv run mypy src
 
 
 .PHONY: ray-submit
