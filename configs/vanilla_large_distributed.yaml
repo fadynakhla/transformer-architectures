@@ -31,7 +31,8 @@ Dataset:
   val_split: 0.01
   test_split: 0.01
 
-MLFlow:
+RunTracking:
+  logger_type: mlflow
   tracking_uri: http://10.9.9.249:5000
   experiment_name: "Vanilla Transformer Large - ENFR Distributed"
   enable_system_metrics: true

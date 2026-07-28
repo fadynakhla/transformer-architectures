@@ -3,45 +3,41 @@ import faulthandler
 import logging
 import pathlib
 import signal
-import socket
 import sys
-from typing import Any, ContextManager, Generic, Literal, Protocol, TypeVar
+from typing import Any, ContextManager, Generic, Literal, TypeVar
 import abc
 import contextlib
 import math
 
 import loguru
-import mlflow
 import ray.train.torch
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import tqdm
 
-from transformer_architectures.training import (
-    base_train_config,
-    checkpointing,
-    grad_logging,
-)
+from transformer_architectures import run_tracking
+from transformer_architectures.training import base_train_config, checkpointing
 from transformer_architectures.training.distributed import context, datamodule
 
 logger = loguru.logger
 
 
 _TC = TypeVar("_TC", bound=base_train_config.BaseTrainConfig)
+_DM = TypeVar("_DM", bound=datamodule.DataModule)
 
 
-class TrainableArchitecture(Protocol, Generic[_TC]):
+class TrainableArchitecture(abc.ABC, Generic[_TC, _DM]):
     architecture_name: str
     train_config: _TC
-    mlflow_config: base_train_config.MLFlowConfig
-    mlflow_run_id: str | None
+    run_tracking_config: run_tracking.RunTrackingConfig
+    run_logger: run_tracking.BaseRunLogger
+    attach_run_id: str | None
 
     @abc.abstractmethod
     def build_model(self) -> nn.Module: ...
 
     @abc.abstractmethod
-    def build_datamodule(self) -> datamodule.DataModule: ...
+    def build_datamodule(self) -> _DM: ...
 
     @abc.abstractmethod
     def build_optimizer(self, model: nn.Module) -> optim.Optimizer: ...
@@ -70,10 +66,10 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
     def evaluate(
         self,
         model: nn.Module,
-        data_module: datamodule.DataModule,
+        data_module: _DM,
         criterion: nn.Module,
         autocast_ctx: ContextManager,
-        stage: str,
+        stage: Literal["train", "val", "test"],
         epoch: int,
         global_step: int,
         distributed_ctx: context.DistributedContext,
@@ -85,7 +81,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
     def train_epoch(
         self,
         model: nn.Module,
-        data_module: datamodule.DataModule,
+        data_module: _DM,
         criterion: nn.Module,
         optimizer: optim.Optimizer,
         scheduler: optim.lr_scheduler.LRScheduler,
@@ -157,7 +153,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                 is_log_step = global_step % log_interval == 0
                 if distributed_ctx.is_head and (is_log_step or is_final_step):
                     lr = float(scheduler.get_last_lr()[0])
-                    log_train_metrics(
+                    self.log_train_metrics(
                         model=model,
                         loss=accumulated_loss_val,
                         lr=lr,
@@ -178,11 +174,17 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         faulthandler.enable(file=sys.stderr, all_threads=True)
         faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
         distributed_ctx = context.DistributedContext.from_ray_context()
-        self.mlflow_setup(distributed_ctx)
-        with mlflow.start_run(run_id=self.mlflow_run_id):
-            self.run_training(distributed_ctx)
+        self.run_logger = self.run_tracking_config.build(
+            world_rank=distributed_ctx.world_rank, attach_run_id=self.attach_run_id
+        )
+        with self.run_logger.run() as run_meta:
+            self.run_training(distributed_ctx, run_meta)
 
-    def run_training(self, distributed_ctx: context.DistributedContext):
+    def run_training(
+        self,
+        distributed_ctx: context.DistributedContext,
+        run_meta: run_tracking.RunMeta,
+    ) -> None:
         model = self.build_model()
         model = ray.train.torch.prepare_model(model)
 
@@ -191,10 +193,10 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
         torch.distributed.barrier(timeout=datetime.timedelta(hours=2))
 
         if distributed_ctx.is_head:
-            mlflow.log_params(params=self.make_run_params())
-            mlflow.log_text(
+            self.run_logger.log_params(self.make_run_params())
+            self.run_logger.log_text(
                 text=f"{data_module.train_dataset[0]}",
-                artifact_file="sample_batch.txt",
+                artifact_file="sample_batch.txt"
             )
         autocast_ctx = make_autocast_ctx(
             self.train_config.precision, distributed_ctx.device
@@ -249,6 +251,7 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
                         self.architecture_name,
                         epoch,
                         global_step,
+                        run_meta=run_meta,
                     )
             torch.distributed.barrier()
         if distributed_ctx.is_head:
@@ -264,19 +267,21 @@ class TrainableArchitecture(Protocol, Generic[_TC]):
             )
         torch.distributed.barrier()
 
-    def mlflow_setup(self, distributed_ctx: context.DistributedContext):
-        if self.mlflow_run_id is None and not distributed_ctx.is_head:
-            return
-        mlflow.set_tracking_uri(self.mlflow_config.tracking_uri)
-        mlflow.set_experiment(self.mlflow_config.experiment_name)
-        if self.mlflow_config.enable_system_metrics:
-            node_id = f"{socket.gethostname()}-rank{distributed_ctx.world_rank}"
-            mlflow.set_system_metrics_node_id(node_id)
-            mlflow.config.enable_system_metrics_logging() # pyright: ignore[reportPrivateImportUsage]
-            mlflow.config.set_system_metrics_sampling_interval(  # pyright: ignore[reportPrivateImportUsage]
-                self.mlflow_config.system_metrics_interval
-            )
-
+    def log_train_metrics(
+        self,
+        model: nn.Module,
+        loss: float,
+        lr: float,
+        epoch: int,
+        epoch_frac: float,
+        step: int,
+        log_distributions: bool,
+    ) -> None:
+        self.run_logger.log_metrics(
+            {"train_loss": loss, "learning_rate": lr, "epoch": epoch, "epoch_frac": epoch_frac},
+            step=step,
+        )
+        self.run_logger.log_grads(unwrap_model(model), step, log_distributions)
 
 def make_autocast_ctx(
     precision: Literal["fp32", "bf16"], device: torch.device
@@ -305,26 +310,6 @@ def unwrap_model(model: nn.Module) -> nn.Module:
     return model
 
 
-def log_train_metrics(
-    model: nn.Module,
-    loss: float,
-    lr: float,
-    epoch: int,
-    epoch_frac: float,
-    step: int,
-    log_distributions: bool,
-) -> None:
-    mlflow.log_metrics(
-        {
-            "train_loss": loss,
-            "learning_rate": lr,
-            "epoch": epoch,
-            "epoch_frac": epoch_frac,
-        },
-        step=step,
-    )
-
-    grad_logging.log_grads(unwrap_model(model), step, log_distributions)
 
 
 def synchronize_int_min(

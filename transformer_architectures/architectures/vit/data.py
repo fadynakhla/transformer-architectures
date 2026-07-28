@@ -306,7 +306,7 @@ class MultiLabelDataCollator:
         return LabeledBatch(images=images, labels=labels, masks=masks)
 
 
-class TransformerDataModule:
+class ViTDataModule:
     """Inspired by data modules in torch lightning."""
 
     def __init__(

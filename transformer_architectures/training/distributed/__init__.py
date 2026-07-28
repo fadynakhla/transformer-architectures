@@ -6,7 +6,6 @@ from transformer_architectures.training.distributed.datamodule import (
 )
 from transformer_architectures.training.distributed.trainable_architecture import (
     TrainableArchitecture,
-    log_train_metrics,
     make_autocast_ctx,
     unwrap_model,
 )
@@ -19,5 +18,4 @@ __all__ = [
     "TrainableArchitecture",
     "make_autocast_ctx",
     "unwrap_model",
-    "log_train_metrics",
 ]

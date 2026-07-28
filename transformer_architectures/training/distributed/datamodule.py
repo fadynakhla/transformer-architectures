@@ -1,4 +1,4 @@
-from typing import Any, Literal, Protocol, TypeVar
+from typing import Any, Literal, TypeVar
 import abc
 
 import torch
@@ -9,7 +9,7 @@ from transformer_architectures.training.distributed import context
 _T = TypeVar("_T")
 
 
-class DataModule(Protocol):
+class DataModule(abc.ABC):
     generator: torch.Generator
 
     _train_dataset: torchd.Dataset | None = None

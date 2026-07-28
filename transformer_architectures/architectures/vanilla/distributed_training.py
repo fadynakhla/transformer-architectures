@@ -1,8 +1,7 @@
-from typing import Any, Callable, ContextManager, Optional
+from typing import Any, Callable, ContextManager, Literal, Optional
 import functools
 import math
 
-import mlflow
 import pydantic
 import torch
 import torch.nn as nn
@@ -13,7 +12,7 @@ from nltk.translate import (  # pyright: ignore[reportMissingTypeStubs]
 )
 from torch.optim.lr_scheduler import LRScheduler
 
-from transformer_architectures import config
+from transformer_architectures import config, run_tracking
 from transformer_architectures.architectures import vanilla
 from transformer_architectures.architectures.vanilla import data, datamodule
 from transformer_architectures.training import base_train_config, distributed
@@ -67,7 +66,7 @@ class ModelConfig(pydantic.BaseModel):
     dropout: float = 0.3
 
 
-class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
+class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig, datamodule.VanillaDataModule]):
     architecture_name: str = "vanilla_transformer"
 
     def __init__(
@@ -75,14 +74,14 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         train_config: TrainingConfig,
         model_config: ModelConfig,
         dataset_config: data.DatasetConfig,
-        mlflow_config: base_train_config.MLFlowConfig,
-        mlflow_run_id: str | None,
+        tracking_config: run_tracking.RunTrackingConfig,
+        attach_run_id: str | None,
     ) -> None:
         self.train_config = train_config
         self.model_config = model_config
         self.dataset_config = dataset_config
-        self.mlflow_config = mlflow_config
-        self.mlflow_run_id = mlflow_run_id
+        self.run_tracking_config = tracking_config
+        self.attach_run_id = attach_run_id
 
         self.max_bleu = 0.0
         self.max_gleu = 0.0
@@ -97,8 +96,8 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
             dropout=self.model_config.dropout,
         )
 
-    def build_datamodule(self) -> datamodule.TransformerDataModule:
-        return datamodule.TransformerDataModule(
+    def build_datamodule(self) -> datamodule.VanillaDataModule:
+        return datamodule.VanillaDataModule(
             dataset_config=self.dataset_config,
             tokenizer=self.tokenizer,
             per_device_train_batch_size=self.train_config.per_device_train_batch_size,
@@ -157,14 +156,15 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
             )
         return loss
 
+
     @torch.no_grad()
     def evaluate(
         self,
         model: nn.Module,
-        data_module: distributed.DataModule,
+        data_module: datamodule.VanillaDataModule,
         criterion: nn.Module,
         autocast_ctx: ContextManager,
-        stage: str,
+        stage: Literal["train", "val", "test"],
         epoch: int,
         global_step: int,
         distributed_ctx: distributed.DistributedContext,
@@ -174,7 +174,7 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         hypotheses: list[list[str]] = []
         references: list[list[list[str]]] = []
 
-        dataloader = data_module.dataloader(stage) # type: ignore
+        dataloader = data_module.dataloader(stage)
         for i, batch in enumerate(dataloader):
             batch.to(distributed_ctx.device)
             with autocast_ctx:
@@ -209,11 +209,11 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
                 and (stage == "test" or epoch % 5 == 0)
             ):
                 for j, (h, r) in enumerate(zip(hypotheses, references)):
-                    mlflow.log_text(
+                    self.run_logger.log_text(
                         text=f"{h}",
                         artifact_file=f"{stage}/epoch_{epoch}/sample{j}/hypothesis.txt",
                     )
-                    mlflow.log_text(
+                    self.run_logger.log_text(
                         text=f"{r}",
                         artifact_file=f"{stage}/epoch_{epoch}/sample{j}/references.txt",
                     )
@@ -222,7 +222,7 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         gleu = float(gleu_score.corpus_gleu(references, hypotheses))
         bleu = float(bleu_score.corpus_bleu(references, hypotheses))  # type: ignore
         if distributed_ctx.is_head:
-            mlflow.log_metrics(
+            self.run_logger.log_metrics(
                 {
                     f"{stage}_loss": avg_loss,
                     f"{stage}_gleu": gleu,
@@ -250,15 +250,15 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig]):
         dataset_config = config.load_config(
             path, section="Dataset", model_class=data.DatasetConfig
         )
-        mlflow_config = config.load_config(
-            path, section="MLFlow", model_class=base_train_config.MLFlowConfig
+        run_logging_config = config.load_config(
+            path, section="RunTracking", model_class=run_tracking.RunTrackingConfig
         )
         return cls(
-            train_config, model_config, dataset_config, mlflow_config, mlflow_run_id
+            train_config, model_config, dataset_config, run_logging_config, mlflow_run_id
         )
 
     def log_batch(self, batch: data.LabeledBatch, step: int, epoch: int) -> None:
-        mlflow.log_dict(
+        self.run_logger.log_dict(
             {
                 "input_ids": batch.input_ids.tolist(),
                 "decoder_input_ids": batch.decoder_input_ids.tolist(),

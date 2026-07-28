@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from transformer_architectures import run_tracking
+
 MODEL_DIR = "/data/trained/"
 
 
@@ -17,10 +19,11 @@ def save_checkpoint(
     model_name: str,
     epoch: int,
     global_step: int,
+    run_meta: run_tracking.RunMeta,
     overwrite: bool = False,
 ) -> None:
-    run_name = mlflow.active_run().info.run_name  # type: ignore
-    run_id = mlflow.active_run().info.run_id  # type: ignore
+    run_name = run_meta.run_name
+    run_id = run_meta.run_id
     save_dir = os.path.join(MODEL_DIR, model_name, f"{run_name}_{run_id[:6]}")
     if epoch == 0:
         make_dir(save_dir, overwrite)

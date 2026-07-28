@@ -1,15 +1,15 @@
 import sys
 
-import mlflow
 import ray
 from ray.train import RunConfig, ScalingConfig
 from ray.train.torch import TorchConfig, TorchTrainer
 
 from transformer_architectures import config
+from transformer_architectures import run_tracking
 from transformer_architectures.architectures.vanilla.distributed_training import (
     TrainableTransformer,
 )
-from transformer_architectures.training.base_train_config import MLFlowConfig, RayConfig
+from transformer_architectures.training.base_train_config import RayConfig
 
 CONFIG_PATH = "configs/vanilla_large_distributed.yaml"
 
@@ -31,14 +31,13 @@ def main() -> None:
     ray_config = config.load_config(
         config_path, section="Distributed", model_class=RayConfig
     )
-    mlflow_config = config.load_config(
-        config_path, section="MLFlow", model_class=MLFlowConfig
+    tracking_config = config.load_config(
+        config_path, section="RunTracking", model_class=run_tracking.RunTrackingConfig
     )
     ray.init(runtime_env={"env_vars": NCCL_ENV_VARS})
-    mlflow.set_tracking_uri(mlflow_config.tracking_uri)
-    mlflow.set_experiment(mlflow_config.experiment_name)
-    with mlflow.start_run() as run:
-        arch = TrainableTransformer.from_yaml_config(config_path, run.info.run_id)
+    run_logger = tracking_config.build()
+    with run_logger.run() as run_meta:
+        arch = TrainableTransformer.from_yaml_config(config_path, run_meta.run_id)
 
         trainer = TorchTrainer(
             train_loop_per_worker=arch.distributed_train_loop,

@@ -14,7 +14,7 @@ from transformer_architectures.training import data_utils, distributed
 logger = loguru.logger
 
 
-class TransformerDataModule(distributed.DataModule):
+class VanillaDataModule(distributed.DataModule):
     def __init__(
         self,
         dataset_config: data.DatasetConfig,
