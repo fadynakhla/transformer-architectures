@@ -1,8 +1,10 @@
-from typing import Literal, Optional, Protocol, TypeVar, runtime_checkable
+from typing import Literal, Optional, TypeVar
 import dataclasses
-import math
+import itertools
 import multiprocessing
+import os
 
+import loguru
 import numpy as np
 import pydantic
 import torch
@@ -10,17 +12,27 @@ from torch.utils import data as torchd
 
 from transformer_architectures import samplers
 from transformer_architectures.architectures.vanilla import tokenization
+from transformer_architectures.training import data_utils
+
+logger = loguru.logger
 
 IGNORE_ID = -100
 
-_T_co = TypeVar("_T_co", covariant=True)
 Label = TypeVar("Label", None, torch.Tensor)
 LabelMask = TypeVar("LabelMask", None, torch.Tensor)
 
 
-class SourceTarget(pydantic.BaseModel):
+@dataclasses.dataclass
+class SourceTarget:
     source: str
     target: str
+
+
+class DatasetConfig(pydantic.BaseModel):
+    data_path: str
+    num_samples: int
+    val_split: float
+    test_split: float
 
 
 @dataclasses.dataclass
@@ -84,25 +96,50 @@ class TransformerDataset(torchd.Dataset[dict[str, np.ndarray]]):
         }
 
     def _setup_arrays(self, data: list[SourceTarget]) -> None:
+        logger.info(
+            "_setup_arrays: n_samples={} cpu_count={} os_cpu_count={} sched_affinity={}",
+            len(data),
+            multiprocessing.cpu_count(),
+            os.cpu_count(),
+            sorted(os.sched_getaffinity(0)),
+        )
+        logger.info("Tokenizing data with tiktoken.")
         tokenized = self.tokenizer(
             encoder_inputs=[dp.source for dp in data],
             decoder_inputs=[dp.target for dp in data],
         )
-        enc_flat: list[int] = []
-        dec_flat: list[int] = []
-        enc_offsets: list[int] = [0]
-        dec_offsets: list[int] = [0]
-        for enc_ids, dec_ids in zip(
-            tokenized.input_ids, tokenized.decoder_input_ids, strict=True
-        ):
-            enc_flat.extend(enc_ids)
-            dec_flat.extend(dec_ids)
-            enc_offsets.append(len(enc_flat))
-            dec_offsets.append(len(dec_flat))
-        self._input_ids_flat = np.array(enc_flat, dtype=np.int32)
-        self._decoder_ids_flat = np.array(dec_flat, dtype=np.int32)
-        self._input_ids_offsets = np.array(enc_offsets, dtype=np.int64)
-        self._decoder_ids_offsets = np.array(dec_offsets, dtype=np.int64)
+        logger.info("Data tokenized")
+
+        logger.info("Creating data and offset arrays")
+        enc_ids = tokenized.input_ids
+        dec_ids = tokenized.decoder_input_ids
+        n = len(enc_ids)
+
+        enc_lens = np.fromiter((len(x) for x in enc_ids), dtype=np.int64, count=n)
+        dec_lens = np.fromiter((len(x) for x in dec_ids), dtype=np.int64, count=n)
+
+        self._input_ids_offsets = np.empty(n + 1, dtype=np.int64)
+        self._input_ids_offsets[0] = 0
+        np.cumsum(enc_lens, out=self._input_ids_offsets[1:])
+
+        self._decoder_ids_offsets = np.empty(n + 1, dtype=np.int64)
+        self._decoder_ids_offsets[0] = 0
+        np.cumsum(dec_lens, out=self._decoder_ids_offsets[1:])
+        logger.info("Offset arrays created")
+
+        self._input_ids_flat = np.fromiter(
+            itertools.chain.from_iterable(enc_ids),
+            dtype=np.int32,
+            count=int(self._input_ids_offsets[-1]),
+        )
+        self._decoder_ids_flat = np.fromiter(
+            itertools.chain.from_iterable(dec_ids),
+            dtype=np.int32,
+            count=int(self._decoder_ids_offsets[-1]),
+        )
+        logger.info(
+            f"Data arrays created with lengths encoder input ids: {len(self._input_ids_flat)} and decoder input ids: {len(self._decoder_ids_flat)}"
+        )
 
 
 class TransformerDataCollator:
@@ -119,7 +156,7 @@ class TransformerDataCollator:
         self.pad_to_multiple_of = pad_to_multiple_of
 
     def __call__(self, batch: list[dict[str, np.ndarray]]) -> LabeledBatch:
-        list_batch = [
+        list_batch: list[dict[str, list[int]]] = [
             {
                 "input_ids": sample["input_ids"].tolist(),
                 "decoder_input_ids": sample["decoder_input_ids"].tolist(),
@@ -133,117 +170,3 @@ class TransformerDataCollator:
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
         return LabeledBatch.from_batch_encoding(batch_encoding, self.label_pad_token_id)
-
-
-class TransformerDataModule:
-    """Inspired by data modules in torch lightning."""
-
-    def __init__(
-        self,
-        data: list[SourceTarget],
-        tokenizer: tokenization.Tokenizer,
-        per_device_train_batch_size: int,
-        per_device_eval_batch_size: int,
-        test_split: float = 0.2,
-        val_split: float = 0.1,
-        seed: int = 42,
-        token_budget: Optional[int] = None,
-        sort_window: Optional[int] = None,
-    ) -> None:
-        self.data = data
-        self.tokenizer = tokenizer
-        self.per_device_train_batch_size = per_device_train_batch_size
-        self.per_device_eval_batch_size = per_device_eval_batch_size
-        self.val_split = val_split
-        self.test_split = test_split
-        self.token_budget = token_budget
-        self.sort_window = sort_window
-        self.generator = torch.Generator().manual_seed(seed)
-        self.train_batch_sampler: Optional[torchd.Sampler[list[int]]] = None
-        self.data_collator = TransformerDataCollator(
-            tokenizer=tokenizer, padding="longest", pad_to_multiple_of=8
-        )
-
-    def setup(self) -> None:
-        full_dataset = TransformerDataset(self.data, self.tokenizer)
-        self.train_dataset, self.val_dataset, self.test_dataset = train_val_test_split(
-            full_dataset, self.val_split, self.test_split, self.generator
-        )
-        if self.token_budget is not None:
-            self.train_batch_sampler = samplers.TokenBudgetBatchSampler(
-                dataset=self.train_dataset,
-                token_budget=self.token_budget,
-                sort_window=self.sort_window,
-                generator=self.generator,
-            )
-
-    def train_dataloader(self) -> torchd.DataLoader[dict[str, np.ndarray]]:
-        if self.train_batch_sampler is not None:
-            return torchd.DataLoader(
-                dataset=self.train_dataset,
-                batch_sampler=self.train_batch_sampler,
-                collate_fn=self.data_collator,
-                num_workers=multiprocessing.cpu_count(),
-                pin_memory=False,
-            )
-        return torchd.DataLoader(
-            dataset=self.train_dataset,
-            batch_size=self.per_device_train_batch_size,
-            collate_fn=self.data_collator,
-            shuffle=True,
-            generator=self.generator,
-            num_workers=multiprocessing.cpu_count(),
-            pin_memory=False,
-        )
-
-    def val_dataloader(self) -> torchd.DataLoader[dict[str, np.ndarray]]:
-        return torchd.DataLoader(
-            dataset=self.val_dataset,
-            batch_size=self.per_device_eval_batch_size,
-            collate_fn=self.data_collator,
-            shuffle=False,
-        )
-
-    def test_dataloader(self) -> torchd.DataLoader[dict[str, np.ndarray]]:
-        return torchd.DataLoader(
-            dataset=self.test_dataset,
-            batch_size=self.per_device_eval_batch_size,
-            collate_fn=self.data_collator,
-            shuffle=False,
-        )
-
-    def dataloader(
-        self, stage: Literal["train", "val", "test"]
-    ) -> torchd.DataLoader[dict[str, np.ndarray]]:
-        match stage:
-            case "train":
-                return self.train_dataloader()
-            case "val":
-                return self.val_dataloader()
-            case "test":
-                return self.test_dataloader()
-
-
-@runtime_checkable
-class HasLen(Protocol):
-    def __len__(self) -> int:
-        ...
-
-
-DataSplit = tuple[torchd.Subset[_T_co], torchd.Subset[_T_co], torchd.Subset[_T_co]]
-
-
-def train_val_test_split(
-    dataset: torchd.Dataset[_T_co],
-    val_split: float,
-    test_split: float,
-    generator: torch.Generator,
-) -> DataSplit[_T_co]:
-    if not isinstance(dataset, HasLen):
-        raise ValueError("Dataset must implement __len__")
-    total_size = len(dataset)
-    val_size = math.floor(total_size * val_split)
-    test_size = math.floor(total_size * test_split)
-    train_size = total_size - val_size - test_size
-    subs = torchd.random_split(dataset, [train_size, val_size, test_size], generator)
-    return subs[0], subs[1], subs[2]

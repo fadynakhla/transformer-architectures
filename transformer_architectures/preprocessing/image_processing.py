@@ -1,8 +1,10 @@
 import torch
-from torchvision.transforms import InterpolationMode
 from torchvision.transforms import (
-    v2 as transforms,
-)  # pyright: ignore[reportMissingTypeStubs]
+    InterpolationMode,
+)
+from torchvision.transforms import (
+    v2 as transforms,  # pyright: ignore[reportMissingTypeStubs]
+)
 
 
 def build_transform(image_size: int, mode: str) -> transforms.Compose:

@@ -5,7 +5,7 @@ import re
 import pydantic
 import yaml
 
-T = TypeVar("T", bound=pydantic.BaseModel)
+T = TypeVar("T")
 
 
 def load_config(filepath: str, section: str, model_class: Type[T]) -> T:
@@ -37,6 +37,6 @@ def load_config(filepath: str, section: str, model_class: Type[T]) -> T:
     section_data = yaml.safe_load(interpolated_section)
 
     try:
-        return model_class(**section_data)
+        return pydantic.TypeAdapter(model_class).validate_python(section_data)
     except pydantic.ValidationError as e:
         raise ValueError(f"Validation failed for section '{section}': {e}")

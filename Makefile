@@ -13,3 +13,8 @@ format: # Format code with isort and black
 .PHONY: typecheck
 typecheck: # Statically type check code using mypy
 	uv run mypy transformer_architectures
+
+
+.PHONY: ray-submit
+ray-submit: # Submit training job to ray cluster
+	uv run ray job submit --working-dir . -- uv run $(RAY_JOB)

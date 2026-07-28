@@ -1,7 +1,7 @@
 from transformer_architectures.architectures.vit.data import (
     LabeledBatch,
     LabeledImage,
-    TransformerDataModule,
+    ViTDataModule,
 )
 from transformer_architectures.architectures.vit.transformer import (
     VisionTransformer,
@@ -11,7 +11,7 @@ from transformer_architectures.architectures.vit.transformer import (
 __all__ = [
     "VisionTransformer",
     "VisionTransformerForImageClassification",
-    "TransformerDataModule",
+    "ViTDataModule",
     "LabeledImage",
     "LabeledBatch",
 ]

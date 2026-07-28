@@ -11,7 +11,7 @@ import torch.optim as optim
 import torchvision.ops as ops
 import tqdm
 
-from transformer_architectures import config
+from transformer_architectures import config, run_tracking
 from transformer_architectures.architectures import vit
 
 # from transformer_architectures.datasets import wmt_en_fr
@@ -68,7 +68,7 @@ train_config = config.load_config(
 
 def train() -> None:
     logger.info("Creating DataModule")
-    data_module = vit.TransformerDataModule(
+    data_module = vit.ViTDataModule(
         data_dir=train_config.data_path,
         annotations_dir=train_config.annotations_path,
         data_samples=train_config.num_samples,
@@ -118,7 +118,11 @@ def train() -> None:
     )
     global_step = 0
     min_eval_loss = 1e9
-    with mlflow.start_run():
+    with mlflow.start_run() as active_run:
+        run_meta = run_tracking.RunMeta(
+            run_name=active_run.info.run_name or active_run.info.run_id,
+            run_id=active_run.info.run_id,
+        )
         mlflow.log_params(params=params)
         mlflow.log_text(
             text=f"{data_module.train_dataset[0]}", artifact_file="sample_batch.txt"
@@ -148,12 +152,13 @@ def train() -> None:
                     NAME,
                     epoch,
                     global_step,
+                    run_meta=run_meta,
                 )
 
 
 def train_epoch(
     model: vit.VisionTransformer,
-    data_module: vit.TransformerDataModule,
+    data_module: vit.ViTDataModule,
     criterion: nn.BCEWithLogitsLoss,
     optimizer: optim.Optimizer,
     scheduler: optim.lr_scheduler.LRScheduler,
@@ -223,7 +228,7 @@ def log_train_metrics(
 @torch.no_grad()  # pyright: ignore[reportUntypedFunctionDecorator]
 def eval_epoch(
     model: vit.VisionTransformer,
-    data_module: vit.TransformerDataModule,
+    data_module: vit.ViTDataModule,
     criterion: nn.BCEWithLogitsLoss,
     global_step: int,
     threshold: float = 0.5,
@@ -266,7 +271,7 @@ def eval_epoch(
 
 
 @torch.no_grad()  # pyright: ignore[reportUntypedFunctionDecorator]
-def compute_pos_weight(data_module: vit.TransformerDataModule) -> torch.Tensor:
+def compute_pos_weight(data_module: vit.ViTDataModule) -> torch.Tensor:
     pos = torch.zeros(data_module.num_classes, dtype=torch.float64)
     # known = torch.zeros(data_module.num_classes, dtype=torch.float64)
     dataloader = data_module.train_dataloader()

@@ -143,6 +143,7 @@ class AttentionLayerFromConfigMixin(abc.ABC):
             num_heads=config.num_heads,
             attention=attention,
             pre_layernorm=config.pre_layernorm,
+            dropout=config.attention_dropout_prob,
         )
 
 

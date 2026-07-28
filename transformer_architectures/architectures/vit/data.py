@@ -13,8 +13,8 @@ from PIL import Image
 from torch.utils import data as torchd
 from torchvision.io import read_image  # pyright: ignore[reportMissingTypeStubs]
 from torchvision.transforms import (
-    v2 as transforms,
-)  # pyright: ignore[reportMissingTypeStubs]
+    v2 as transforms,  # pyright: ignore[reportMissingTypeStubs]
+)
 
 from transformer_architectures.preprocessing import image_processing
 
@@ -306,7 +306,7 @@ class MultiLabelDataCollator:
         return LabeledBatch(images=images, labels=labels, masks=masks)
 
 
-class TransformerDataModule:
+class ViTDataModule:
     """Inspired by data modules in torch lightning."""
 
     def __init__(
