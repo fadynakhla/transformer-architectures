@@ -4,8 +4,7 @@ import ray
 from ray.train import RunConfig, ScalingConfig
 from ray.train.torch import TorchConfig, TorchTrainer
 
-from transformer_architectures import config
-from transformer_architectures import run_tracking
+from transformer_architectures import config, run_tracking
 from transformer_architectures.architectures.vanilla.distributed_training import (
     TrainableTransformer,
 )
@@ -25,6 +24,7 @@ NCCL_ENV_VARS = {
     "NCCL_IB_HCA": "rocep1s0f0:1,roceP2p1s0f0:1",
     "TORCH_NCCL_TRACE_CPP_STACK": "1",
 }
+
 
 def main() -> None:
     config_path = sys.argv[1] if len(sys.argv) > 1 else CONFIG_PATH

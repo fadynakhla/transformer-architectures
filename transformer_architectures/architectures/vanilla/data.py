@@ -137,7 +137,9 @@ class TransformerDataset(torchd.Dataset[dict[str, np.ndarray]]):
             dtype=np.int32,
             count=int(self._decoder_ids_offsets[-1]),
         )
-        logger.info(f"Data arrays created with lengths encoder input ids: {len(self._input_ids_flat)} and decoder input ids: {len(self._decoder_ids_flat)}")
+        logger.info(
+            f"Data arrays created with lengths encoder input ids: {len(self._input_ids_flat)} and decoder input ids: {len(self._decoder_ids_flat)}"
+        )
 
 
 class TransformerDataCollator:

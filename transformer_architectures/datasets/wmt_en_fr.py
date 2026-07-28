@@ -1,6 +1,6 @@
 from typing import Generator
-import os
 import csv
+import os
 
 import loguru
 
@@ -50,7 +50,9 @@ def load_kaggle_format(
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Expected file {file_path} not found.")
 
-    logger.info(f"loading {num_samples if num_samples else 'All'} samples from WMT English to French dataset stage: {stage}.")
+    logger.info(
+        f"loading {num_samples if num_samples else 'All'} samples from WMT English to French dataset stage: {stage}."
+    )
     with open(file_path, "r", encoding="utf-8") as file:
         reader = csv.DictReader(file, fieldnames=["en", "fr"])
         for _ in range(start_index):

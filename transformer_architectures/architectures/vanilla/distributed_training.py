@@ -66,7 +66,9 @@ class ModelConfig(pydantic.BaseModel):
     dropout: float = 0.3
 
 
-class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig, datamodule.VanillaDataModule]):
+class TrainableTransformer(
+    distributed.TrainableArchitecture[TrainingConfig, datamodule.VanillaDataModule]
+):
     architecture_name: str = "vanilla_transformer"
 
     def __init__(
@@ -103,7 +105,7 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig, dat
             per_device_train_batch_size=self.train_config.per_device_train_batch_size,
             per_device_eval_batch_size=self.train_config.per_device_eval_batch_size,
             token_budget=self.train_config.token_budget,
-            sort_window=self.train_config.sort_window
+            sort_window=self.train_config.sort_window,
         )
 
     def build_optimizer(self, model: nn.Module) -> optim.Optimizer:
@@ -155,7 +157,6 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig, dat
                 batch.target.view(-1),
             )
         return loss
-
 
     @torch.no_grad()
     def evaluate(
@@ -254,7 +255,11 @@ class TrainableTransformer(distributed.TrainableArchitecture[TrainingConfig, dat
             path, section="RunTracking", model_class=run_tracking.RunTrackingConfig
         )
         return cls(
-            train_config, model_config, dataset_config, run_logging_config, mlflow_run_id
+            train_config,
+            model_config,
+            dataset_config,
+            run_logging_config,
+            mlflow_run_id,
         )
 
     def log_batch(self, batch: data.LabeledBatch, step: int, epoch: int) -> None:

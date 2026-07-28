@@ -1,13 +1,13 @@
-import datetime
-import faulthandler
-import logging
-import pathlib
-import signal
-import sys
 from typing import Any, ContextManager, Generic, Literal, TypeVar
 import abc
 import contextlib
+import datetime
+import faulthandler
+import logging
 import math
+import pathlib
+import signal
+import sys
 
 import loguru
 import ray.train.torch
@@ -34,24 +34,30 @@ class TrainableArchitecture(abc.ABC, Generic[_TC, _DM]):
     attach_run_id: str | None
 
     @abc.abstractmethod
-    def build_model(self) -> nn.Module: ...
+    def build_model(self) -> nn.Module:
+        ...
 
     @abc.abstractmethod
-    def build_datamodule(self) -> _DM: ...
+    def build_datamodule(self) -> _DM:
+        ...
 
     @abc.abstractmethod
-    def build_optimizer(self, model: nn.Module) -> optim.Optimizer: ...
+    def build_optimizer(self, model: nn.Module) -> optim.Optimizer:
+        ...
 
     @abc.abstractmethod
     def build_scheduler(
         self, optimizer: optim.Optimizer, steps_per_epoch: int
-    ) -> optim.lr_scheduler.LRScheduler: ...
+    ) -> optim.lr_scheduler.LRScheduler:
+        ...
 
     @abc.abstractmethod
-    def build_criterion(self) -> nn.Module: ...
+    def build_criterion(self) -> nn.Module:
+        ...
 
     @abc.abstractmethod
-    def make_run_params(self) -> dict[str, Any]: ...
+    def make_run_params(self) -> dict[str, Any]:
+        ...
 
     @abc.abstractmethod
     def train_step(
@@ -60,7 +66,8 @@ class TrainableArchitecture(abc.ABC, Generic[_TC, _DM]):
         batch: Any,
         criterion: nn.Module,
         autocast_ctx: ContextManager,
-    ) -> torch.Tensor: ...
+    ) -> torch.Tensor:
+        ...
 
     @abc.abstractmethod
     def evaluate(
@@ -73,10 +80,12 @@ class TrainableArchitecture(abc.ABC, Generic[_TC, _DM]):
         epoch: int,
         global_step: int,
         distributed_ctx: context.DistributedContext,
-    ) -> dict[str, float]: ...
+    ) -> dict[str, float]:
+        ...
 
     @abc.abstractmethod
-    def log_batch(self, batch: Any, step: int, epoch: int) -> None: ...
+    def log_batch(self, batch: Any, step: int, epoch: int) -> None:
+        ...
 
     def train_epoch(
         self,
@@ -115,7 +124,7 @@ class TrainableArchitecture(abc.ABC, Generic[_TC, _DM]):
 
         # progress_bar: tqdm.tqdm | None = None
         # if distributed_ctx.is_head:
-            # progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
+        # progress_bar = tqdm.tqdm(total=total_groups, desc=f"Epoch {epoch}")
         for i, batch in enumerate(dataloader):
             if i == 0 and distributed_ctx.is_head:
                 self.log_batch(batch, global_step, epoch)
@@ -195,8 +204,7 @@ class TrainableArchitecture(abc.ABC, Generic[_TC, _DM]):
         if distributed_ctx.is_head:
             self.run_logger.log_params(self.make_run_params())
             self.run_logger.log_text(
-                text=f"{data_module.train_dataset[0]}",
-                artifact_file="sample_batch.txt"
+                text=f"{data_module.train_dataset[0]}", artifact_file="sample_batch.txt"
             )
         autocast_ctx = make_autocast_ctx(
             self.train_config.precision, distributed_ctx.device
@@ -278,10 +286,16 @@ class TrainableArchitecture(abc.ABC, Generic[_TC, _DM]):
         log_distributions: bool,
     ) -> None:
         self.run_logger.log_metrics(
-            {"train_loss": loss, "learning_rate": lr, "epoch": epoch, "epoch_frac": epoch_frac},
+            {
+                "train_loss": loss,
+                "learning_rate": lr,
+                "epoch": epoch,
+                "epoch_frac": epoch_frac,
+            },
             step=step,
         )
         self.run_logger.log_grads(unwrap_model(model), step, log_distributions)
+
 
 def make_autocast_ctx(
     precision: Literal["fp32", "bf16"], device: torch.device
@@ -308,8 +322,6 @@ def unwrap_model(model: nn.Module) -> nn.Module:
     if isinstance(model, torch.nn.parallel.DistributedDataParallel):
         return model.module
     return model
-
-
 
 
 def synchronize_int_min(
