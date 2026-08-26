@@ -198,7 +198,7 @@ class TrainableArchitecture(abc.ABC, Generic[_TC, _DM]):
 
         data_module = self.build_datamodule()
         data_module.setup(distributed_ctx)
-        torch.distributed.barrier(timeout=datetime.timedelta(hours=2))
+        torch.distributed.barrier()
 
         if distributed_ctx.is_head:
             self.run_logger.log_params(self.make_run_params())
