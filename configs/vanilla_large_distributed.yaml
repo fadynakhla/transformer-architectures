@@ -13,11 +13,11 @@ Training:
   grad_accumulation_steps: 12
   learning_rate: 5e-4
   warmup_steps: 4000
-  epochs: 20
+  epochs: 18
   label_smoothing: 0.1
   eval_metric: bleu
   comparator: ">"
-  log_interval: 50
+  log_interval: 200
   log_grad_distributions: false
   precision: bf16
   # Token-budget bucketing. Uncomment to enable; batch_size is then ignored for training.
@@ -27,7 +27,7 @@ Training:
 Dataset:
   data_path: /data/datasets/wmt/english-french-2014-kaggle
   # data_path: /data/datasets/wmt/en-fr
-  num_samples: 16000000
+  num_samples: 22000000
   val_split: 0.01
   test_split: 0.01
 
